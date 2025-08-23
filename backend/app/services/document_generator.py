@@ -1,6 +1,5 @@
 # backend/app/services/document_generator.py
 from docx import Document
-from docx.shared import RGBColor
 import tempfile
 import os
 import re
@@ -39,73 +38,75 @@ class DocumentGenerator:
             if not self._contains_placeholders(full_text):
                 continue
             
-            # Find all placeholders in the paragraph
-            placeholders = list(re.finditer(self.placeholder_pattern, full_text))
-            if not placeholders:
-                continue
-            
-            # Process replacements from right to left to maintain positions
-            for match in reversed(placeholders):
-                placeholder_name = match.group(1)
-                replacement_value = str(user_data.get(placeholder_name, f"{{{{{placeholder_name}}}}}"))
-                start_pos, end_pos = match.span()
-                
-                # Replace the placeholder while preserving formatting
-                self._replace_text_in_paragraph(paragraph, start_pos, end_pos, replacement_value)
+            # Use the new method to handle split placeholders
+            self._replace_split_placeholders(paragraph, user_data)
     
-    def _replace_text_in_paragraph(self, paragraph, start_pos: int, end_pos: int, replacement_text: str):
-        """Replace text in paragraph while preserving as much formatting as possible"""
-        # Build a list of all runs and their cumulative positions
+    def _replace_split_placeholders(self, paragraph, user_data: Dict[str, Any]):
+        """Replace placeholders that might be split across multiple runs"""
+        full_text = paragraph.text
+        
+        # Find all placeholders in the complete text
+        placeholders = list(re.finditer(self.placeholder_pattern, full_text))
+        if not placeholders:
+            return
+        
+        # Process placeholders from right to left to maintain positions
+        for match in reversed(placeholders):
+            placeholder_name = match.group(1)
+            replacement_value = str(user_data.get(placeholder_name, f"{{{{{placeholder_name}}}}}"))
+            start_pos, end_pos = match.span()
+            
+            # Replace the text across runs
+            self._replace_text_across_runs(paragraph, start_pos, end_pos, replacement_value)
+    
+    def _replace_text_across_runs(self, paragraph, start_pos: int, end_pos: int, replacement_text: str):
+        """Replace text that spans across multiple runs"""
+        # Build a map of character positions to runs
         runs_info = []
         current_pos = 0
         
-        for run in paragraph.runs:
-            run_start = current_pos
-            run_end = current_pos + len(run.text)
+        for run_index, run in enumerate(paragraph.runs):
+            run_length = len(run.text)
             runs_info.append({
                 'run': run,
-                'start': run_start,
-                'end': run_end,
-                'text': run.text
+                'run_index': run_index,
+                'start_pos': current_pos,
+                'end_pos': current_pos + run_length,
+                'original_text': run.text
             })
-            current_pos = run_end
+            current_pos += run_length
         
-        # Find which runs contain the placeholder
+        # Find which runs are affected by the replacement
         affected_runs = []
         for run_info in runs_info:
-            if (run_info['start'] < end_pos and run_info['end'] > start_pos):
+            # Check if this run overlaps with the replacement range
+            if run_info['start_pos'] < end_pos and run_info['end_pos'] > start_pos:
                 affected_runs.append(run_info)
         
         if not affected_runs:
             return
         
-        # Calculate positions within runs
-        first_run = affected_runs[0]
-        last_run = affected_runs[-1]
-        
-        # Calculate the cut positions within the first and last runs
-        cut_start = start_pos - first_run['start']
-        cut_end = end_pos - last_run['start']
-        
-        # Preserve formatting from the first affected run
-        template_run = first_run['run']
-        
-        if len(affected_runs) == 1:
-            # Placeholder is within a single run
-            original_text = first_run['text']
-            new_text = original_text[:cut_start] + replacement_text + original_text[cut_end:]
-            first_run['run'].text = new_text
-        else:
-            # Placeholder spans multiple runs
-            # Clear middle runs
-            for i in range(1, len(affected_runs) - 1):
-                affected_runs[i]['run'].text = ""
+        # Calculate what part of each run to keep/replace
+        for i, run_info in enumerate(affected_runs):
+            run = run_info['run']
+            run_start = run_info['start_pos']
+            run_end = run_info['end_pos']
+            original_text = run_info['original_text']
             
-            # Update first run
-            first_run['run'].text = first_run['text'][:cut_start] + replacement_text
+            # Calculate the slice positions within this run
+            slice_start = max(0, start_pos - run_start)
+            slice_end = min(len(original_text), end_pos - run_start)
             
-            # Update last run
-            last_run['run'].text = last_run['text'][cut_end:]
+            if i == 0:
+                # First affected run: keep text before placeholder + replacement
+                new_text = original_text[:slice_start] + replacement_text + original_text[slice_end:]
+                run.text = new_text
+            else:
+                # Other affected runs: keep text after placeholder (if any)
+                if slice_end < len(original_text):
+                    run.text = original_text[slice_end:]
+                else:
+                    run.text = ""
     
     def _process_tables(self, tables, user_data: Dict[str, Any]):
         """Process tables and replace placeholders"""
@@ -120,62 +121,14 @@ class DocumentGenerator:
             # Process header
             if section.header:
                 self._process_paragraphs(section.header.paragraphs, user_data)
-                # Process header tables if any
-                for table in section.header.tables:
-                    self._process_tables([table], user_data)
             
             # Process footer  
             if section.footer:
                 self._process_paragraphs(section.footer.paragraphs, user_data)
-                # Process footer tables if any
-                for table in section.footer.tables:
-                    self._process_tables([table], user_data)
     
     def _contains_placeholders(self, text: str) -> bool:
         """Check if text contains placeholders"""
         return bool(re.search(self.placeholder_pattern, text))
-    
-    def get_template_placeholders(self, template_path: str) -> List[str]:
-        """Extract all placeholders from template for debugging"""
-        try:
-            doc = Document(template_path)
-            placeholders = set()
-            
-            # Get from paragraphs
-            for paragraph in doc.paragraphs:
-                matches = re.findall(self.placeholder_pattern, paragraph.text)
-                placeholders.update(matches)
-                print(f"Paragraph text: '{paragraph.text}'")  # Debug
-                if matches:
-                    print(f"Found placeholders: {matches}")  # Debug
-            
-            # Get from tables
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for paragraph in cell.paragraphs:
-                            matches = re.findall(self.placeholder_pattern, paragraph.text)
-                            placeholders.update(matches)
-                            if matches:
-                                print(f"Table cell text: '{paragraph.text}', placeholders: {matches}")  # Debug
-            
-            # Get from headers/footers
-            for section in doc.sections:
-                for paragraph in section.header.paragraphs:
-                    matches = re.findall(self.placeholder_pattern, paragraph.text)
-                    placeholders.update(matches)
-                
-                for paragraph in section.footer.paragraphs:
-                    matches = re.findall(self.placeholder_pattern, paragraph.text)
-                    placeholders.update(matches)
-            
-            result = sorted(list(placeholders))
-            print(f"All found placeholders: {result}")  # Debug
-            return result
-            
-        except Exception as e:
-            print(f"Error extracting placeholders: {e}")  # Debug
-            return []
     
     def preview_replacements(self, template_path: str, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """Preview what replacements will be made (for debugging)"""
@@ -193,34 +146,13 @@ class DocumentGenerator:
                         return str(user_data.get(key, f"{{{{ {key} }}}}"))
                     
                     replaced = re.sub(self.placeholder_pattern, replace_match, original)
-                    replacements.append({
-                        "type": "paragraph",
-                        "index": i,
-                        "original": original,
-                        "replaced": replaced
-                    })
-            
-            # Check tables
-            for table_idx, table in enumerate(doc.tables):
-                for row_idx, row in enumerate(table.rows):
-                    for cell_idx, cell in enumerate(row.cells):
-                        for para_idx, paragraph in enumerate(cell.paragraphs):
-                            original = paragraph.text
-                            if self._contains_placeholders(original):
-                                def replace_match(match):
-                                    key = match.group(1)
-                                    return str(user_data.get(key, f"{{{{ {key} }}}}"))
-                                
-                                replaced = re.sub(self.placeholder_pattern, replace_match, original)
-                                replacements.append({
-                                    "type": "table_cell",
-                                    "table": table_idx,
-                                    "row": row_idx,
-                                    "cell": cell_idx,
-                                    "paragraph": para_idx,
-                                    "original": original,
-                                    "replaced": replaced
-                                })
+                    if original != replaced:
+                        replacements.append({
+                            "type": "paragraph",
+                            "index": i,
+                            "original": original,
+                            "replaced": replaced
+                        })
             
             return {
                 "success": True,
