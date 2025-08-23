@@ -13,7 +13,7 @@ class TemplateParser:
             "header": ["nomor", "number", "tanggal", "date", "lampiran", "attachment", "hal", "subject", "perihal"],
             "recipient": ["kepada", "recipient", "yth", "alamat", "address", "kota", "location", "tempat"],
             "personal": ["nama", "name", "nim", "id", "program", "student", "mahasiswa", "prodi"],
-            "content": ["judul", "title", "kegiatan", "activity", "penelitian", "research", "lama", "duration", "waktu", "period", "lokasi"],
+            "content": ["judul", "title", "kegiatan", "activity", "penelitian", "research", "lama", "duration", "waktu", "period", "lokasi", "isi"],
             "signature": ["penandatangan", "signer", "nip", "jabatan", "position", "direktur", "kepala"],
             "other": []
         }
