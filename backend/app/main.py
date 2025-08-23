@@ -271,7 +271,89 @@ def test_interface():
     </body>
     </html>
     """
+# Add this to your backend/app/main.py
 
+@app.get("/api/templates/{template_id}/inspect")
+def inspect_template_content(template_id: int, db: Session = Depends(get_db)):
+    """Inspect what's actually in the Word document"""
+    template = db.query(Template).filter(Template.id == template_id).first()
+    if not template:
+        raise HTTPException(404, "Template not found")
+    
+    try:
+        from docx import Document
+        doc = Document(template.file_path)
+        
+        result = {
+            "template_name": template.name,
+            "paragraphs": [],
+            "tables": [],
+            "headers": [],
+            "footers": []
+        }
+        
+        # Check all paragraphs
+        for i, para in enumerate(doc.paragraphs):
+            if para.text.strip():  # Only show non-empty paragraphs
+                runs_info = []
+                for j, run in enumerate(para.runs):
+                    if run.text:  # Only show non-empty runs
+                        runs_info.append({
+                            "run_index": j,
+                            "text": repr(run.text),  # Use repr to show exact characters
+                            "length": len(run.text)
+                        })
+                
+                result["paragraphs"].append({
+                    "paragraph_index": i,
+                    "full_text": repr(para.text),
+                    "text_length": len(para.text),
+                    "runs": runs_info,
+                    "runs_count": len(para.runs)
+                })
+        
+        # Check tables
+        for t_idx, table in enumerate(doc.tables):
+            table_info = {"table_index": t_idx, "cells": []}
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    cell_text = cell.text.strip()
+                    if cell_text:
+                        table_info["cells"].append({
+                            "row": r_idx,
+                            "col": c_idx,
+                            "text": repr(cell_text)
+                        })
+            if table_info["cells"]:
+                result["tables"].append(table_info)
+        
+        # Check headers
+        for s_idx, section in enumerate(doc.sections):
+            if section.header:
+                for p_idx, para in enumerate(section.header.paragraphs):
+                    if para.text.strip():
+                        result["headers"].append({
+                            "section": s_idx,
+                            "paragraph": p_idx,
+                            "text": repr(para.text)
+                        })
+        
+        # Check footers
+        for s_idx, section in enumerate(doc.sections):
+            if section.footer:
+                for p_idx, para in enumerate(section.footer.paragraphs):
+                    if para.text.strip():
+                        result["footers"].append({
+                            "section": s_idx,
+                            "paragraph": p_idx,
+                            "text": repr(para.text)
+                        })
+        
+        return result
+        
+    except Exception as e:
+        return {"error": str(e), "template_path": template.file_path}
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
