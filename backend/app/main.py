@@ -1,359 +1,280 @@
 # backend/app/main.py
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 import os
-import shutil
-import tempfile
-import uuid
+import logging
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 # Local imports
-from .database import engine, get_db, Base
-from .models.template import Template
-from .services.template_parser import TemplateParser
-from .services.document_generator import DocumentGenerator
+from .database import engine, Base
+from .config import settings
+from .routers import students, admin, auth 
+from .models.logging_config import setup_logging
+from .utils.security import check_rate_limit
+from .models.responses import HealthResponse, ConfigResponse, ErrorResponse
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# Setup logging before anything else
+setup_logging()
+logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan management"""
+    # Startup
+    logger.info("University Letter Generator starting up...")
+    
+    # Create database tables
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables created/verified")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        raise
+    
+    # Create necessary directories
+    directories = ["templates", "temp", "generated_docs", "uploads", "exports", "logs"]
+    for directory in directories:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            logger.debug(f"Directory ensured: {directory}")
+        except Exception as e:
+            logger.error(f"Failed to create directory {directory}: {e}")
+    
+    # Initialize services
+    try:
+        from .services.document_generator import DocumentGenerator
+        doc_gen = DocumentGenerator()
+        app.state.pdf_available = doc_gen.pdf_available
+        logger.info(f"PDF Generation: {'Available' if app.state.pdf_available else 'Not Available'}")
+    except Exception as e:
+        logger.error(f"Document generator initialization failed: {e}")
+        app.state.pdf_available = False
+    
+    # Log configuration status
+    logger.info(f"Database: {'SQLite (Development)' if settings.database_url.startswith('sqlite') else 'PostgreSQL (Production)'}")
+    logger.info(f"Google Drive: {'Configured' if settings.google_drive_folder_id else 'Not Configured'}")
+    logger.info(f"Email Service: {'Configured' if settings.resend_api_key else 'Not Configured'}")
+    logger.info(f"Debug Mode: {settings.debug}")
+    logger.info("Startup complete!")
+    
+    yield
+    
+    # Shutdown
+    logger.info("University Letter Generator shutting down...")
+    
+    # Cleanup temporary files
+    import tempfile
+    import glob
+    
+    temp_files = glob.glob("temp/*")
+    for temp_file in temp_files:
+        try:
+            os.remove(temp_file)
+        except Exception as e:
+            logger.warning(f"Failed to remove temp file {temp_file}: {e}")
+    
+    logger.info("Shutdown complete!")
+
+# Initialize FastAPI app with lifespan
 app = FastAPI(
-    title="Auto Letter Generator",
-    description="Automatic letter generation system with template parsing",
-    version="1.0.0"
+    title="University Letter Generator",
+    description="Automated letter generation system for universities",
+    version="2.0.0",
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    lifespan=lifespan
 )
 
-# Enable CORS for frontend development
+# Security middleware
+if not settings.debug:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["yourdomain.com", "*.yourdomain.com"]  # Configure for your domain
+    )
+
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React dev server
+    allow_origins=settings.get_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
-# Create directories
-os.makedirs("templates", exist_ok=True)
-os.makedirs("temp", exist_ok=True)
-
-# Initialize services
-template_parser = TemplateParser()
-document_generator = DocumentGenerator()
+# Include routers
+app.include_router(auth.router)     
+app.include_router(students.router)
+app.include_router(admin.router)
 
 # Basic routes
-@app.get("/")
-def read_root():
-    return {"message": "Auto Letter Generator API", "version": "1.0.0"}
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-# Template routes
-@app.post("/api/templates/upload")
-async def upload_template(
-    file: UploadFile = File(...),
-    name: str = Form(None),
-    category: str = Form("general"),
-    db: Session = Depends(get_db)
-):
-    """Upload and parse a template file"""
-    
-    # Validate file type
-    if not file.filename.lower().endswith('.docx'):
-        raise HTTPException(400, "Only .docx files are supported")
-    
-    try:
-        # Generate unique filename
-        file_id = str(uuid.uuid4())
-        file_extension = os.path.splitext(file.filename)[1]
-        stored_filename = f"{file_id}{file_extension}"
-        file_path = f"templates/{stored_filename}"
-        
-        # Save uploaded file
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # Parse template
-        parse_result = template_parser.parse_template(file_path)
-        
-        if not parse_result["success"]:
-            # Clean up failed file
-            os.remove(file_path)
-            raise HTTPException(400, f"Template parsing failed: {parse_result['error']}")
-        
-        # Save template to database
-        template_name = name or os.path.splitext(file.filename)[0]
-        template = Template(
-            name=template_name,
-            original_filename=file.filename,
-            category=category,
-            schema=parse_result["schema"],
-            file_path=file_path
-        )
-        
-        db.add(template)
-        db.commit()
-        db.refresh(template)
-        
-        return {
-            "success": True,
-            "template_id": template.id,
-            "name": template.name,
-            "field_count": parse_result["field_count"],
-            "schema": parse_result["schema"],
-            "message": f"Template uploaded successfully with {parse_result['field_count']} fields detected"
-        }
-        
-    except Exception as e:
-        # Clean up on error
-        if 'file_path' in locals() and os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(500, f"Upload failed: {str(e)}")
-
-@app.get("/api/templates")
-def list_templates(db: Session = Depends(get_db)):
-    """Get all templates"""
-    templates = db.query(Template).all()
+@app.get("/", response_model=dict)
+async def read_root(request: Request):
+    """Root endpoint"""
+    check_rate_limit(request, limit=10, window_minutes=1)
     return {
-        "templates": [
-            {
-                "id": t.id,
-                "name": t.name,
-                "category": t.category,
-                "original_filename": t.original_filename,
-                "field_count": len(t.schema.get("sections", [])),
-                "created_at": t.created_at.isoformat() if t.created_at else None
-            }
-            for t in templates
-        ]
+        "message": "University Letter Generator API",
+        "version": "2.0.0",
+        "status": "running",
+        "timestamp": datetime.now().isoformat(),
+        "documentation": "/docs" if settings.debug else "Contact administrator"
     }
 
-@app.get("/api/templates/{template_id}")
-def get_template(template_id: int, db: Session = Depends(get_db)):
-    """Get template details and schema"""
-    template = db.query(Template).filter(Template.id == template_id).first()
+@app.get("/health", response_model=HealthResponse)
+async def health_check(request: Request):
+    check_rate_limit(request, limit=30, window_minutes=1)
+    """Health check endpoint"""
     
-    if not template:
-        raise HTTPException(404, "Template not found")
+    services = {}
     
-    return {
-        "id": template.id,
-        "name": template.name,
-        "category": template.category,
-        "original_filename": template.original_filename,
-        "schema": template.schema,
-        "created_at": template.created_at.isoformat() if template.created_at else None
-    }
-
-@app.post("/api/documents/generate/{template_id}")
-async def generate_document(
-    template_id: int,
-    form_data: dict,
-    db: Session = Depends(get_db)
-):
-    """Generate document from template and form data"""
-    
-    # Get template
-    template = db.query(Template).filter(Template.id == template_id).first()
-    if not template:
-        raise HTTPException(404, "Template not found")
-    
+    # Check database
     try:
-        # Generate document
-        output_path = document_generator.generate_document(
-            template.file_path, 
-            form_data
-        )
-        
-        # Return file for download
-        filename = f"generated_{template.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-        
-        return FileResponse(
-            output_path,
-            filename=filename,
-            media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            background=lambda: os.unlink(output_path) if os.path.exists(output_path) else None
-        )
-        
+        from .database import SessionLocal
+        db = SessionLocal()
+        db.execute("SELECT 1")
+        db.close()
+        services["database"] = "connected"
     except Exception as e:
-        raise HTTPException(500, f"Document generation failed: {str(e)}")
+        logger.error(f"Database health check failed: {e}")
+        services["database"] = "error"
+    
+    # Check Google Drive
+    if settings.google_drive_folder_id and settings.google_credentials_path:
+        try:
+            from .services.drive_uploader import DriveUploader
+            drive_uploader = DriveUploader(
+                settings.google_credentials_path,
+                settings.google_drive_folder_id
+            )
+            services["google_drive"] = "configured" if drive_uploader.is_available() else "error"
+        except Exception:
+            services["google_drive"] = "error"
+    else:
+        services["google_drive"] = "not_configured"
+    
+    # Check email service
+    if settings.resend_api_key:
+        services["email"] = "configured"
+    else:
+        services["email"] = "not_configured"
+    
+    # Overall status
+    status = "healthy" if services.get("database") == "connected" else "degraded"
+    
+    return HealthResponse(
+        status=status,
+        database=services["database"],
+        timestamp=datetime.now().isoformat(),
+        services=services
+    )
 
-@app.delete("/api/templates/{template_id}")
-def delete_template(template_id: int, db: Session = Depends(get_db)):
-    """Delete a template"""
-    template = db.query(Template).filter(Template.id == template_id).first()
-    
-    if not template:
-        raise HTTPException(404, "Template not found")
-    
-    # Delete file
-    if os.path.exists(template.file_path):
-        os.remove(template.file_path)
-    
-    # Delete from database
-    db.delete(template)
-    db.commit()
-    
-    return {"message": "Template deleted successfully"}
+@app.get("/config", response_model=ConfigResponse)
+async def get_config(request: Request):
+    check_rate_limit(request, limit=10, window_minutes=1)
+    """Get public configuration information"""
+    return ConfigResponse(
+        features={
+            "google_drive": bool(settings.google_drive_folder_id),
+            "email_notifications": bool(settings.resend_api_key),
+            "pdf_generation": getattr(app.state, 'pdf_available', False)
+        },
+        version="2.0.0",
+        environment="development" if settings.debug else "production"
+    )
 
-# Simple HTML interface for testing
-@app.get("/test", response_class=HTMLResponse)
-def test_interface():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Auto Letter Generator - Test</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-            .upload-area { border: 2px dashed #ccc; padding: 20px; margin: 20px 0; text-align: center; }
-            button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-            button:hover { background: #0056b3; }
-            .result { margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 4px; }
-        </style>
-    </head>
-    <body>
-        <h1>🚀 Auto Letter Generator - Test Interface</h1>
-        <p>Upload a .docx template to test the parsing functionality</p>
-        
-        <form id="uploadForm" enctype="multipart/form-data">
-            <div class="upload-area">
-                <input type="file" name="file" accept=".docx" required>
-                <br><br>
-                <input type="text" name="name" placeholder="Template name (optional)">
-                <br><br>
-                <button type="submit">Upload & Parse Template</button>
-            </div>
-        </form>
-        
-        <div id="result" class="result" style="display: none;"></div>
-        
-        <script>
-            document.getElementById('uploadForm').onsubmit = async function(e) {
-                e.preventDefault();
-                const formData = new FormData(this);
-                const resultDiv = document.getElementById('result');
-                
-                try {
-                    resultDiv.innerHTML = 'Uploading and parsing...';
-                    resultDiv.style.display = 'block';
-                    
-                    const response = await fetch('/api/templates/upload', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        resultDiv.innerHTML = `
-                            <h3>✅ Success!</h3>
-                            <p><strong>Template ID:</strong> ${result.template_id}</p>
-                            <p><strong>Fields detected:</strong> ${result.field_count}</p>
-                            <p><strong>Message:</strong> ${result.message}</p>
-                            <details>
-                                <summary>Schema Details</summary>
-                                <pre>${JSON.stringify(result.schema, null, 2)}</pre>
-                            </details>
-                        `;
-                    } else {
-                        resultDiv.innerHTML = `<h3>❌ Error:</h3><p>${result.error || 'Unknown error'}</p>`;
-                    }
-                } catch (error) {
-                    resultDiv.innerHTML = `<h3>❌ Error:</h3><p>${error.message}</p>`;
-                }
-            };
-        </script>
-    </body>
-    </html>
-    """
-# Add this to your backend/app/main.py
+# Global exception handlers
+# 404 Not Found
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    logger.warning(f"404 error for {request.url.path} from {request.client.host if request.client else 'unknown'}")
+    content = ErrorResponse(
+        error="Not Found",
+        details={"path": str(request.url.path)},
+        timestamp=datetime.now()
+    )
+    return JSONResponse(
+        status_code=404,
+        content=jsonable_encoder(content)
+    )
 
-@app.get("/api/templates/{template_id}/inspect")
-def inspect_template_content(template_id: int, db: Session = Depends(get_db)):
-    """Inspect what's actually in the Word document"""
-    template = db.query(Template).filter(Template.id == template_id).first()
-    if not template:
-        raise HTTPException(404, "Template not found")
+# 422 Validation Error
+@app.exception_handler(422)
+async def validation_error_handler(request: Request, exc):
+    logger.warning(f"Validation error for {request.url.path}: {getattr(exc, 'detail', exc)}")
+    content = ErrorResponse(
+        error="Validation Error",
+        details={"validation_errors": getattr(exc, 'detail', str(exc))},
+        timestamp=datetime.now()
+    )
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder(content)
+    )
+
+# 500 Internal Server Error
+@app.exception_handler(500)
+async def internal_error_handler(request: Request, exc):
+    logger.error(f"Internal error for {request.url.path}: {exc}", exc_info=True)
+    content = ErrorResponse(
+        error="Internal Server Error",
+        details={"message": "An unexpected error occurred"} if not settings.debug else {"error": str(exc)},
+        timestamp=datetime.now()
+    )
+    return JSONResponse(
+        status_code=500,
+        content=jsonable_encoder(content)
+    )
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all requests"""
+    start_time = datetime.now()
     
-    try:
-        from docx import Document
-        doc = Document(template.file_path)
-        
-        result = {
-            "template_name": template.name,
-            "paragraphs": [],
-            "tables": [],
-            "headers": [],
-            "footers": []
-        }
-        
-        # Check all paragraphs
-        for i, para in enumerate(doc.paragraphs):
-            if para.text.strip():  # Only show non-empty paragraphs
-                runs_info = []
-                for j, run in enumerate(para.runs):
-                    if run.text:  # Only show non-empty runs
-                        runs_info.append({
-                            "run_index": j,
-                            "text": repr(run.text),  # Use repr to show exact characters
-                            "length": len(run.text)
-                        })
-                
-                result["paragraphs"].append({
-                    "paragraph_index": i,
-                    "full_text": repr(para.text),
-                    "text_length": len(para.text),
-                    "runs": runs_info,
-                    "runs_count": len(para.runs)
-                })
-        
-        # Check tables
-        for t_idx, table in enumerate(doc.tables):
-            table_info = {"table_index": t_idx, "cells": []}
-            for r_idx, row in enumerate(table.rows):
-                for c_idx, cell in enumerate(row.cells):
-                    cell_text = cell.text.strip()
-                    if cell_text:
-                        table_info["cells"].append({
-                            "row": r_idx,
-                            "col": c_idx,
-                            "text": repr(cell_text)
-                        })
-            if table_info["cells"]:
-                result["tables"].append(table_info)
-        
-        # Check headers
-        for s_idx, section in enumerate(doc.sections):
-            if section.header:
-                for p_idx, para in enumerate(section.header.paragraphs):
-                    if para.text.strip():
-                        result["headers"].append({
-                            "section": s_idx,
-                            "paragraph": p_idx,
-                            "text": repr(para.text)
-                        })
-        
-        # Check footers
-        for s_idx, section in enumerate(doc.sections):
-            if section.footer:
-                for p_idx, para in enumerate(section.footer.paragraphs):
-                    if para.text.strip():
-                        result["footers"].append({
-                            "section": s_idx,
-                            "paragraph": p_idx,
-                            "text": repr(para.text)
-                        })
-        
-        return result
-        
-    except Exception as e:
-        return {"error": str(e), "template_path": template.file_path}
+    # Log request
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"{request.method} {request.url.path} from {client_ip}")
     
+    # Process request
+    response = await call_next(request)
+    
+    # Log response
+    process_time = (datetime.now() - start_time).total_seconds()
+    logger.info(f"Response {response.status_code} for {request.method} {request.url.path} in {process_time:.3f}s")
+    
+    # Add timing header
+    response.headers["X-Process-Time"] = str(process_time)
+    
+    return response
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Add security headers"""
+    response = await call_next(request)
+    
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    if not settings.debug:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
+    return response
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    
+    # Development configuration
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.debug,
+        reload_dirs=["app"] if settings.debug else None,
+        log_level="info" if settings.debug else "warning",
+        access_log=settings.debug
+    )

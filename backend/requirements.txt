@@ -1,7 +1,45 @@
+# Core FastAPI and web framework
 fastapi==0.116.1
 uvicorn==0.35.0
-python-docx==1.2.0
 python-multipart==0.0.20
+
+# Document processing
+python-docx==1.2.0
+docx2pdf==0.1.8  # For Windows PDF conversion
+openpyxl==3.1.5  # For Excel export
+
+# Database
 sqlalchemy==2.0.43
-jinja2==3.1.4
+alembic==1.13.1  # For database migrations
+
+# Configuration and settings
+pydantic==2.9.1
+pydantic-settings==2.5.2
+
+# File handling
 aiofiles==24.1.0
+
+# Template engine
+jinja2==3.1.4
+
+# Google services
+google-api-python-client==2.143.0
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+
+# HTTP requests
+requests==2.32.3
+
+# Password hashing
+bcrypt==4.2.0
+
+# Data processing
+pandas==2.2.3
+numpy==1.26.4
+
+# Email service (already using Resend API via requests)
+
+# Development tools (optional, remove in production)
+pytest==8.3.3
+pytest-asyncio==0.24.0

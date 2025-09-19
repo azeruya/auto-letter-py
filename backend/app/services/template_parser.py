@@ -1,8 +1,10 @@
 # backend/app/services/template_parser.py
 from docx import Document
 import re
-import json
 from typing import List, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TemplateParser:
     def __init__(self):
@@ -24,6 +26,8 @@ class TemplateParser:
             doc = Document(file_path)
             placeholders = self._extract_placeholders(doc)
             schema = self._generate_schema(placeholders)
+
+            logger.info(f"Template parsed successfully: {file_path} ({len(placeholders)} placeholders found)")
             
             return {
                 "success": True,
@@ -32,6 +36,7 @@ class TemplateParser:
                 "field_count": len(placeholders)
             }
         except Exception as e:
+            logger.error(f"Failed to parse template {file_path}: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -43,90 +48,32 @@ class TemplateParser:
     def _extract_placeholders(self, doc: Document) -> List[str]:
         """Extract all placeholder fields from the document"""
         placeholders = set()
-        
-        # Extract from paragraphs
-        for paragraph in doc.paragraphs:
-            matches = re.findall(self.placeholder_pattern, paragraph.text)
-            placeholders.update(matches)
-        
-        # Extract from tables
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for paragraph in cell.paragraphs:
-                        matches = re.findall(self.placeholder_pattern, paragraph.text)
-                        placeholders.update(matches)
-        
-        # Extract from headers and footers
-        for section in doc.sections:
-            header = section.header
-            footer = section.footer
+        try:
+            # Extract from paragraphs
+            for paragraph in doc.paragraphs:
+                matches = re.findall(self.placeholder_pattern, paragraph.text)
+                placeholders.update(matches)
             
-            for paragraph in header.paragraphs:
-                matches = re.findall(self.placeholder_pattern, paragraph.text)
-                placeholders.update(matches)
-                
-            for paragraph in footer.paragraphs:
-                matches = re.findall(self.placeholder_pattern, paragraph.text)
-                placeholders.update(matches)
+            # Extract from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            matches = re.findall(self.placeholder_pattern, paragraph.text)
+                            placeholders.update(matches)
+            
+            # Extract from headers and footers
+            for section in doc.sections:
+                for paragraph in section.header.paragraphs:
+                    matches = re.findall(self.placeholder_pattern, paragraph.text)
+                    placeholders.update(matches)
+                for paragraph in section.footer.paragraphs:
+                    matches = re.findall(self.placeholder_pattern, paragraph.text)
+                    placeholders.update(matches)
+        except Exception as e:
+            logger.warning(f"Error extracting placeholders: {e}")
         
         return sorted(list(placeholders))
-    
-    def _generate_schema(self, placeholders: List[str]) -> Dict[str, Any]:
-        """Generate form schema from placeholders"""
-        schema = {"sections": []}
-        used_fields = set()
-        
-        # Group fields into sections
-        for section_name, keywords in self.field_groups.items():
-            if section_name == "other":
-                continue
-                
-            section_fields = []
-            for placeholder in placeholders:
-                if placeholder in used_fields:
-                    continue
-                    
-                # Check if this field belongs to this section
-                if any(keyword in placeholder.lower() for keyword in keywords):
-                    field_config = {
-                        "name": placeholder,
-                        "label": self._humanize_field(placeholder),
-                        "type": self._infer_field_type(placeholder),
-                        "required": True,
-                        "placeholder": f"Masukkan {self._humanize_field(placeholder).lower()}..."
-                    }
-                    section_fields.append(field_config)
-                    used_fields.add(placeholder)
-            
-            if section_fields:
-                schema["sections"].append({
-                    "name": section_name,
-                    "title": self._translate_section_name(section_name),
-                    "fields": section_fields
-                })
-        
-        # Add remaining fields to "other" section
-        other_fields = []
-        for placeholder in placeholders:
-            if placeholder not in used_fields:
-                field_config = {
-                    "name": placeholder,
-                    "label": self._humanize_field(placeholder),
-                    "type": self._infer_field_type(placeholder),
-                    "required": True,
-                    "placeholder": f"Masukkan {self._humanize_field(placeholder).lower()}..."
-                }
-                other_fields.append(field_config)
-        
-        if other_fields:
-            schema["sections"].append({
-                "name": "other",
-                "title": "Lainnya",
-                "fields": other_fields
-            })
-        
-        return schema
     
     def _humanize_field(self, field_name: str) -> str:
         """Convert field name to human-readable format"""
@@ -177,3 +124,30 @@ class TemplateParser:
             "other": "Lainnya"
         }
         return translations.get(section_name, section_name.title())
+    
+    def _generate_schema(self, placeholders: list) -> dict:
+        """
+        Generate a simple schema for the template based on placeholders.
+        """
+        schema = {"sections": []}
+
+        # Example: group fields by your predefined field_groups
+        sections = {}
+        for field in placeholders:
+            added = False
+            for section_name, keywords in self.field_groups.items():
+                if any(k in field.lower() for k in keywords):
+                    sections.setdefault(section_name, []).append(field)
+                    added = True
+                    break
+            if not added:
+                sections.setdefault("other", []).append(field)
+        
+        # Convert sections dict to list format
+        for section_name, fields in sections.items():
+            schema["sections"].append({
+                "name": self._translate_section_name(section_name),
+                "fields": fields
+            })
+
+        return schema

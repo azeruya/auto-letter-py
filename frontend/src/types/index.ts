@@ -61,3 +61,81 @@ export interface ListTemplatesResponse {
 export interface TemplateDetailResponse extends Template {
   schema: TemplateSchema;
 }
+
+// src/types/index.ts
+export interface StudentFormData {
+  nama: string;
+  nim: string;
+  email: string;
+  program_studi: string;
+  keperluan: string;
+  template_id?: string;
+  form_data?: Record<string, any>;
+}
+
+export interface TemplateItem {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  field_count: number;
+  student_fields_count: number;
+  usage_count: number;
+}
+
+export interface TemplateListResponse {
+  success: boolean;
+  message: string;
+  templates: TemplateItem[];
+  total_count: number;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export interface Admin {
+  id: string;
+  username: string;
+  email: string;
+  full_name: string;
+  is_active: boolean;
+  created_at: string;   // backend sends ISO datetime string
+  last_login: string | null; // null if never logged in
+}
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export interface DashboardStats {
+  status_counts: Record<string, number>;
+  total_requests: number;
+  pending_requests: number;
+  recent_requests: {
+    id: string;
+    tracking_id: string;
+    student_name: string;
+    template_name: string;
+    status: string;
+    created_at: string;
+  }[];
+  popular_templates: { name: string; usage_count: number }[];
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  expires_in?: number; // optional 
+}
+
+export interface RequestItem {
+  id: number;
+  student_name: string;
+  template_name: string;
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+}

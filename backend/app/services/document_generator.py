@@ -3,52 +3,162 @@ from docx import Document
 import tempfile
 import os
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple, Optional
+import subprocess
+import platform
+from datetime import datetime  # FIXED: Added missing import
 
 class DocumentGenerator:
     def __init__(self):
         self.placeholder_pattern = r'\{\{(\w+)\}\}'
+        
+        # Check PDF conversion capability
+        self.pdf_available = self._check_pdf_conversion()
     
-    def generate_document(self, template_path: str, user_data: Dict[str, Any]) -> str:
-        """Generate a document from template and user data"""
+    def _check_pdf_conversion(self) -> bool:
+        """Check if PDF conversion is available"""
+        try:
+            if platform.system() == "Windows":
+                # Try docx2pdf (requires Microsoft Word)
+                import docx2pdf
+                return True
+            else:
+                # Try LibreOffice
+                result = subprocess.run(['libreoffice', '--version'], 
+                                      capture_output=True, text=True, timeout=5)
+                return result.returncode == 0
+        except Exception as e:
+            print(f"PDF conversion check failed: {e}")
+            return False
+    
+    def generate_document(self, template_path: str, user_data: Dict[str, Any], 
+                         output_format: str = "docx") -> Tuple[str, Dict[str, Any]]:
+        """Generate a document from template and user data
+        
+        Returns:
+            Tuple of (file_path, metadata)
+        """
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+            
         try:
             # Load the template document
             doc = Document(template_path)
             
             # Process all content with improved placeholder handling
-            self._process_paragraphs(doc.paragraphs, user_data)
-            self._process_tables(doc.tables, user_data)
-            self._process_headers_footers(doc.sections, user_data)
+            replacements_made = 0
+            replacements_made += self._process_paragraphs(doc.paragraphs, user_data)
+            replacements_made += self._process_tables(doc.tables, user_data)
+            replacements_made += self._process_headers_footers(doc.sections, user_data)
             
-            # Save to temporary file
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-            doc.save(temp_file.name)
-            temp_file.close()
+            # Generate base filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            base_filename = f"generated_{timestamp}"
             
-            return temp_file.name
+            # Save as DOCX first
+            temp_docx = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+            doc.save(temp_docx.name)
+            temp_docx.close()
+            
+            # Convert to PDF if requested
+            if output_format.lower() == "pdf":
+                if not self.pdf_available:
+                    raise Exception("PDF conversion not available on this system")
+                
+                temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+                temp_pdf.close()
+                
+                success = self._convert_to_pdf(temp_docx.name, temp_pdf.name)
+                if not success:
+                    raise Exception("PDF conversion failed")
+                
+                # Clean up DOCX and return PDF
+                os.unlink(temp_docx.name)
+                final_file = temp_pdf.name
+            else:
+                final_file = temp_docx.name
+            
+            # Get file metadata
+            metadata = {
+                "replacements_made": replacements_made,
+                "file_size": os.path.getsize(final_file),
+                "format": output_format,
+                "mime_type": self._get_mime_type(output_format)
+            }
+            
+            return final_file, metadata
             
         except Exception as e:
+            # Cleanup any temporary files
+            for temp_file in [locals().get('temp_docx'), locals().get('temp_pdf')]:
+                if temp_file and hasattr(temp_file, 'name') and os.path.exists(temp_file.name):
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
             raise Exception(f"Document generation failed: {str(e)}")
     
-    def _process_paragraphs(self, paragraphs, user_data: Dict[str, Any]):
+    def _convert_to_pdf(self, docx_path: str, pdf_path: str) -> bool:
+        """Convert DOCX to PDF"""
+        try:
+            if platform.system() == "Windows":
+                # Use docx2pdf on Windows
+                from docx2pdf import convert
+                convert(docx_path, pdf_path)
+                return True
+            else:
+                # Use LibreOffice on Linux/Mac
+                output_dir = os.path.dirname(pdf_path)
+                result = subprocess.run([
+                    'libreoffice', '--headless', '--convert-to', 'pdf',
+                    '--outdir', output_dir, docx_path
+                ], capture_output=True, text=True, timeout=60)
+                
+                if result.returncode == 0:
+                    # LibreOffice creates PDF with same basename
+                    generated_pdf = os.path.join(
+                        output_dir, 
+                        os.path.splitext(os.path.basename(docx_path))[0] + '.pdf'
+                    )
+                    if os.path.exists(generated_pdf):
+                        # Move to desired location
+                        if generated_pdf != pdf_path:
+                            os.rename(generated_pdf, pdf_path)
+                        return True
+                return False
+        except Exception as e:
+            print(f"PDF conversion error: {e}")
+            return False
+    
+    def _get_mime_type(self, format_type: str) -> str:
+        """Get MIME type for format"""
+        mime_types = {
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "pdf": "application/pdf"
+        }
+        return mime_types.get(format_type.lower(), "application/octet-stream")
+    
+    def _process_paragraphs(self, paragraphs, user_data: Dict[str, Any]) -> int:
         """Process paragraphs and replace placeholders while preserving formatting"""
+        replacements = 0
         for paragraph in paragraphs:
             # Get full paragraph text to check for placeholders
             full_text = paragraph.text
             if not self._contains_placeholders(full_text):
                 continue
             
-            # Use the new method to handle split placeholders
-            self._replace_split_placeholders(paragraph, user_data)
+            # Use the method to handle split placeholders
+            replacements += self._replace_split_placeholders(paragraph, user_data)
+        return replacements
     
-    def _replace_split_placeholders(self, paragraph, user_data: Dict[str, Any]):
+    def _replace_split_placeholders(self, paragraph, user_data: Dict[str, Any]) -> int:
         """Replace placeholders that might be split across multiple runs"""
         full_text = paragraph.text
         
         # Find all placeholders in the complete text
         placeholders = list(re.finditer(self.placeholder_pattern, full_text))
         if not placeholders:
-            return
+            return 0
         
         # Process placeholders from right to left to maintain positions
         for match in reversed(placeholders):
@@ -58,6 +168,8 @@ class DocumentGenerator:
             
             # Replace the text across runs
             self._replace_text_across_runs(paragraph, start_pos, end_pos, replacement_value)
+        
+        return len(placeholders)
     
     def _replace_text_across_runs(self, paragraph, start_pos: int, end_pos: int, replacement_text: str):
         """Replace text that spans across multiple runs"""
@@ -108,27 +220,71 @@ class DocumentGenerator:
                 else:
                     run.text = ""
     
-    def _process_tables(self, tables, user_data: Dict[str, Any]):
+    def _process_tables(self, tables, user_data: Dict[str, Any]) -> int:
         """Process tables and replace placeholders"""
+        replacements = 0
         for table in tables:
             for row in table.rows:
                 for cell in row.cells:
-                    self._process_paragraphs(cell.paragraphs, user_data)
+                    replacements += self._process_paragraphs(cell.paragraphs, user_data)
+        return replacements
     
-    def _process_headers_footers(self, sections, user_data: Dict[str, Any]):
+    def _process_headers_footers(self, sections, user_data: Dict[str, Any]) -> int:
         """Process headers and footers"""
+        replacements = 0
         for section in sections:
             # Process header
             if section.header:
-                self._process_paragraphs(section.header.paragraphs, user_data)
+                replacements += self._process_paragraphs(section.header.paragraphs, user_data)
             
             # Process footer  
             if section.footer:
-                self._process_paragraphs(section.footer.paragraphs, user_data)
+                replacements += self._process_paragraphs(section.footer.paragraphs, user_data)
+        return replacements
     
     def _contains_placeholders(self, text: str) -> bool:
         """Check if text contains placeholders"""
         return bool(re.search(self.placeholder_pattern, text))
+    
+    def generate_both_formats(self, template_path: str, user_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate both DOCX and PDF versions if possible"""
+        results = {}
+        
+        # Generate DOCX
+        try:
+            docx_path, docx_metadata = self.generate_document(template_path, user_data, "docx")
+            results["docx"] = {
+                "success": True,
+                "file_path": docx_path,
+                "metadata": docx_metadata
+            }
+        except Exception as e:
+            results["docx"] = {
+                "success": False,
+                "error": str(e)
+            }
+        
+        # Generate PDF if available
+        if self.pdf_available:
+            try:
+                pdf_path, pdf_metadata = self.generate_document(template_path, user_data, "pdf")
+                results["pdf"] = {
+                    "success": True,
+                    "file_path": pdf_path,
+                    "metadata": pdf_metadata
+                }
+            except Exception as e:
+                results["pdf"] = {
+                    "success": False,
+                    "error": str(e)
+                }
+        else:
+            results["pdf"] = {
+                "success": False,
+                "error": "PDF conversion not available"
+            }
+        
+        return results
     
     def preview_replacements(self, template_path: str, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """Preview what replacements will be made (for debugging)"""
@@ -157,7 +313,8 @@ class DocumentGenerator:
             return {
                 "success": True,
                 "replacements": replacements,
-                "total_replacements": len(replacements)
+                "total_replacements": len(replacements),
+                "pdf_available": self.pdf_available
             }
             
         except Exception as e:
@@ -165,5 +322,6 @@ class DocumentGenerator:
                 "success": False,
                 "error": str(e),
                 "replacements": [],
-                "total_replacements": 0
+                "total_replacements": 0,
+                "pdf_available": self.pdf_available
             }
