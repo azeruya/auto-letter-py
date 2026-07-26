@@ -182,11 +182,27 @@ class FieldAssignmentService:
                         student_section_fields.append(field)
 
             if student_section_fields:
+                sorted_fields = sorted(
+                    student_section_fields,
+                    key=lambda item: item.get("order", 0),
+                )
+
                 filtered_schema["sections"].append({
-                    "name": section.get("name"),
-                    "title": section.get("title"),
-                    "fields": student_section_fields
+                    "id": section.get("id", section.get("name")),
+                    "name": section.get("name", "Bagian"),
+                    "title": section.get(
+                        "title",
+                        section.get("name", "Bagian"),
+                    ),
+                    "description": section.get("description", ""),
+                    "order": section.get("order", 0),
+                    "fields": sorted_fields,
                 })
+
+        filtered_schema["sections"] = sorted(
+            filtered_schema["sections"],
+            key=lambda item: item.get("order", 0),
+        )
 
         return filtered_schema
     
@@ -223,11 +239,27 @@ class FieldAssignmentService:
                     })
 
             if admin_section_fields:
+                sorted_fields = sorted(
+                    admin_section_fields,
+                    key=lambda item: item.get("order", 0),
+                )
+
                 filtered_schema["sections"].append({
-                    "name": section.get("name"),
-                    "title": section.get("title", section.get("name")),
-                    "fields": admin_section_fields
+                    "id": section.get("id", section.get("name")),
+                    "name": section.get("name", "Bagian"),
+                    "title": section.get(
+                        "title",
+                        section.get("name", "Bagian"),
+                    ),
+                    "description": section.get("description", ""),
+                    "order": section.get("order", 0),
+                    "fields": sorted_fields,
                 })
+
+        filtered_schema["sections"] = sorted(
+            filtered_schema["sections"],
+            key=lambda item: item.get("order", 0),
+        )
 
         return filtered_schema
 
@@ -341,9 +373,19 @@ class FieldAssignmentService:
         required_fields = set()
         for section in template.schema.get("sections", []):
             for field in section.get("fields", []):
-                # field is a string like "alamat", not a dict
-                if field in target_fields:
-                    required_fields.add(field)
+                if isinstance(field, str):
+                    field_name = field
+                    required = True
+                else:
+                    field_name = field.get("name")
+                    required = field.get("required", True)
+
+                if (
+                    field_name
+                    and field_name in target_fields
+                    and required
+                ):
+                    required_fields.add(field_name)
 
         # Check missing fields
         provided_fields = set(data.keys())

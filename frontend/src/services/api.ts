@@ -18,7 +18,8 @@ import {
   LoginResponse,
   RequestItem, 
   TrackingResponse,
-  DashboardStats
+  DashboardStats,
+  FormLayout,
 } from '../types';
 
 // Create axios instance with default config
@@ -383,6 +384,34 @@ export class ApiService {
       `api/admin/templates/${templateId}/field-assignments`,
       assignments
     );
+    return response.data;
+  }
+
+  static async updateFormLayout(
+    templateId: string,
+    layout: {
+      sections: Array<{
+        id: string;
+        name: string;
+        description?: string;
+        order: number;
+        fields: Array<{
+          name: string;
+          label: string;
+          type: string;
+          required: boolean;
+          repeatable?: boolean;
+          order: number;
+          width: 'half' | 'full';
+        }>;
+      }>;
+    }
+  ) {
+    const response = await apiClient.put(
+      `/api/admin/templates/${templateId}/form-layout`,
+      layout
+    );
+
     return response.data;
   }
 

@@ -183,56 +183,70 @@ async def list_available_templates(request: Request, db: Session = Depends(get_d
 import json
 
 @router.get("/templates/{template_id}/form")
-async def get_student_form(
-    request: Request,
-    template_id: str, 
-    db: Session = Depends(get_db)
+async def get_student_form_schema(
+    template_id: str,
+    db: Session = Depends(get_db),
 ):
-    check_rate_limit(request, limit=10, window_minutes=1)
-    """Get form schema for student to fill"""
-    try:
-        template = db.query(Template).filter(
-            Template.id == template_id, 
-            Template.is_active == True
-        ).first()
-        
-        if not template:
-            raise HTTPException(404, "Template not found")
+    template = (
+        db.query(Template)
+        .filter(
+            Template.id == template_id,
+            Template.is_active == True,
+        )
+        .first()
+    )
 
-        # Ensure schema + field_assignments are parsed dicts
-        if isinstance(template.schema, str):
-            try:
-                template.schema = json.loads(template.schema)
-            except Exception as e:
-                logger.error(f"Invalid schema JSON for template {template_id}: {e}")
-                raise HTTPException(500, "Invalid template schema")
+    if not template:
+        raise HTTPException(
+            status_code=404,
+            detail="Template not found",
+        )
 
-        if isinstance(template.field_assignments, str):
-            try:
-                template.field_assignments = json.loads(template.field_assignments)
-            except Exception as e:
-                logger.error(f"Invalid field_assignments JSON for template {template_id}: {e}")
-                raise HTTPException(500, "Invalid field assignments")
+    assignments = template.field_assignments or {}
 
-        # Get student form schema
-        student_schema = field_service.get_student_form_schema(template)
-        
-        return {
-            "template": {
-                "id": template.id,
-                "name": template.name,
-                "description": template.description,
-                "category": template.category
-            },
-            "form_schema": student_schema,
-            "total_student_fields": len(template.field_assignments.get("student_fields", []) if template.field_assignments else [])
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Student form retrieval failed for template {template_id}: {e}")
-        raise HTTPException(500, "Failed to retrieve form")
+    student_fields = set(
+        assignments.get("student_fields", [])
+    )
+
+    schema = template.schema or {"sections": []}
+
+    student_sections = []
+
+    for section in schema.get("sections", []):
+        visible_fields = [
+            field
+            for field in section.get("fields", [])
+            if field.get("name") in student_fields
+        ]
+
+        if not visible_fields:
+            continue
+
+        student_sections.append(
+            {
+                # Preserve section layout metadata.
+                "id": section.get("id"),
+                "name": section.get("name", "Bagian"),
+                "description": section.get(
+                    "description", ""
+                ),
+                "order": section.get("order", 0),
+
+                # Preserve field layout metadata.
+                "fields": visible_fields,
+            }
+        )
+
+    return {
+        "template": {
+            "id": template.id,
+            "name": template.name,
+            "description": template.description,
+        },
+        "form_schema": {
+            "sections": student_sections,
+        },
+    }
 
 
 @router.get("/track/{tracking_id}", response_model=TrackingResponse)

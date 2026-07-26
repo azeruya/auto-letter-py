@@ -181,3 +181,27 @@ export interface TrackingResponse {
   completed_at?: string | null;
   admin_notes?: string | null;
 }
+
+export type FormFieldWidth = 'half' | 'full';
+
+export interface FormLayoutField {
+  name: string;
+  label: string;
+  type: string;
+  required: boolean;
+  repeatable?: boolean;
+  order: number;
+  width: FormFieldWidth;
+}
+
+export interface FormLayoutSection {
+  id: string;
+  name: string;
+  description?: string;
+  order: number;
+  fields: FormLayoutField[];
+}
+
+export interface FormLayout {
+  sections: FormLayoutSection[];
+}

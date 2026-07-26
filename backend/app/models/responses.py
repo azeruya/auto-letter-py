@@ -2,6 +2,7 @@
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
+from typing import Literal
 
 # Base response models
 class BaseResponse(BaseModel):
@@ -166,6 +167,27 @@ class AdminFormData(BaseModel):
         if v:
             return v.strip()
         return v
+    
+class FormLayoutField(BaseModel):
+    name: str
+    label: str
+    type: str = "text"
+    required: bool = True
+    repeatable: bool = False
+    order: int = 0
+    width: Literal["half", "full"] = "half"
+
+
+class FormLayoutSection(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    order: int = 0
+    fields: List[FormLayoutField] = Field(default_factory=list)
+
+
+class FormLayoutUpdate(BaseModel):
+    sections: List[FormLayoutSection] = Field(default_factory=list)
 
 # File upload models
 class FileUploadResponse(BaseResponse):

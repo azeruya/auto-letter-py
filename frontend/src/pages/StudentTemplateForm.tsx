@@ -1,204 +1,553 @@
-import React, { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { useForm, SubmitHandler, useFieldArray, FormProvider, useFormContext } from "react-hook-form";
-import { ApiService } from "../services/api";
-import { StudentFormData } from "../types";
-import LoadingSpinner from "../components/LoadingSpinner";
-import toast from "react-hot-toast";
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  FormProvider,
+  SubmitHandler,
+  useFieldArray,
+  useForm,
+  useFormContext,
+} from 'react-hook-form';
+import { Minus, Plus } from 'lucide-react';
+import toast from 'react-hot-toast';
 
-type FormField = { name: string; label: string; type: string; required: boolean; repeatable?: boolean; };
-type Section = { name: string; fields: FormField[]; };
-type TemplateDetail = { id: string; name: string; description: string; form_schema: { sections: Section[]; }; };
-type DynamicFormInputs = { [key: string]: any; };
+import { ApiService } from '../services/api';
+import { StudentFormData } from '../types';
+import LoadingSpinner from '../components/LoadingSpinner';
+import ErrorMessage from '../components/ErrorMessage';
 
-// Common Indonesian academic-form abbreviations that should stay fully
-// uppercase instead of being Title Cased like a normal word.
-const KNOWN_ACRONYMS = new Set(['nim', 'nip', 'nik', 'ktp', 'kk', 'sks', 'ipk']);
+type FieldWidth = 'half' | 'full';
 
-// Backend labels arrive as raw schema strings ("Tanggal_akhir", "Nim1")
-// — this turns them into "Tanggal Akhir" / "NIM 1" for display, without
-// touching the underlying field.name used for form registration.
-function formatLabel(raw: string): string {
-  return raw
+type FormField = {
+  name: string;
+  label: string;
+  type: string;
+  required: boolean;
+  repeatable?: boolean;
+  order?: number;
+  width?: FieldWidth;
+  options?: string[];
+  editable?: boolean;
+  value?: unknown;
+};
+
+type Section = {
+  id?: string;
+  name: string;
+  title?: string;
+  description?: string;
+  order?: number;
+  fields: FormField[];
+};
+
+type TemplateDetail = {
+  id: string;
+  name: string;
+  description?: string;
+  form_schema: {
+    sections: Section[];
+  };
+};
+
+type DynamicFormInputs = Record<string, any>;
+
+const KNOWN_ACRONYMS = new Set([
+  'nim',
+  'nip',
+  'nik',
+  'ktp',
+  'kk',
+  'sks',
+  'ipk',
+]);
+
+function formatLabel(rawLabel?: string): string {
+  if (!rawLabel) return '';
+
+  return rawLabel
     .replace(/_/g, ' ')
     .replace(/([a-zA-Z])(\d)/g, '$1 $2')
-    .split(' ')
+    .split(/\s+/)
     .filter(Boolean)
     .map((word) => {
-      const lower = word.toLowerCase();
-      if (KNOWN_ACRONYMS.has(lower)) return lower.toUpperCase();
-      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      const lowercaseWord = word.toLowerCase();
+
+      if (KNOWN_ACRONYMS.has(lowercaseWord)) {
+        return lowercaseWord.toUpperCase();
+      }
+
+      return (
+        word.charAt(0).toUpperCase() +
+        word.slice(1).toLowerCase()
+      );
     })
     .join(' ');
 }
 
+function fieldErrorMessage(field: FormField): string {
+  return `${formatLabel(field.label || field.name)} wajib diisi`;
+}
+
 function RepeatableField({ field }: { field: FormField }) {
-  const { control, register } = useFormContext<DynamicFormInputs>();
-  const { fields: arrayFields, append, remove } = useFieldArray({
+  const {
+    control,
+    register,
+    formState: { errors },
+  } = useFormContext<DynamicFormInputs>();
+
+  const {
+    fields: rows,
+    append,
+    remove,
+  } = useFieldArray({
     control,
     name: field.name,
   });
 
-  // Ensure at least one row exists
   useEffect(() => {
-    if (arrayFields.length === 0) append({ value: "" });
-  }, [arrayFields.length, append]);
+    if (rows.length === 0) {
+      append({ value: '' });
+    }
+  }, [append, rows.length]);
+
+  const fieldErrors = errors[field.name];
 
   return (
     <div>
       <label className="form-label">
-        {formatLabel(field.label)} {field.required && <span className="text-rose-600">*</span>}
+        {formatLabel(field.label || field.name)}
+
+        {field.required && (
+          <span className="ml-0.5 text-rose-600">*</span>
+        )}
       </label>
 
-      <div className="space-y-3">
-        {arrayFields.map((row, idx) => (
-          <div key={row.id} className="flex gap-2 items-center">
+      <div className="space-y-2.5">
+        {rows.map((row, index) => (
+          <div
+            key={row.id}
+            className="flex items-start gap-2"
+          >
             <input
-              type={field.type || "text"}
-              {...register(`${field.name}[${idx}].value`, { required: field.required })}
-              className="form-input flex-1"
+              type={field.type || 'text'}
+              {...register(`${field.name}.${index}.value`, {
+                required: field.required,
+              })}
+              disabled={field.editable === false}
+              className="form-input min-w-0 flex-1 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
             />
+
             <button
               type="button"
-              onClick={() => remove(idx)}
-              className="border border-rose-200 text-rose-600 hover:border-rose-300 hover:bg-rose-50 px-2.5 py-1 rounded-full text-xs font-medium transition"
+              onClick={() => remove(index)}
+              disabled={rows.length === 1}
+              className="
+                flex h-12 w-12 shrink-0 items-center justify-center
+                rounded-lg border border-slate-200 bg-white
+                text-slate-500 transition
+                hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600
+                disabled:cursor-not-allowed disabled:opacity-40
+              "
+              aria-label={`Hapus baris ${index + 1}`}
+              title="Hapus baris"
             >
-              Hapus
+              <Minus size={17} strokeWidth={1.8} />
             </button>
           </div>
         ))}
 
+        {fieldErrors && (
+          <p className="text-xs text-rose-600">
+            {fieldErrorMessage(field)}
+          </p>
+        )}
+
         <button
           type="button"
-          onClick={() => append({ value: "" })}
-          className="border border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 px-3 py-1 rounded-full shadow-sm text-sm transition flex items-center gap-1"
+          onClick={() => append({ value: '' })}
+          className="
+            inline-flex h-9 items-center gap-1.5 rounded-lg
+            border border-slate-200 bg-white px-3
+            text-[13px] font-medium text-slate-600
+            transition hover:border-slate-300
+            hover:bg-slate-50 hover:text-slate-900
+          "
         >
-          + Tambah Baris
+          <Plus size={15} strokeWidth={1.8} />
+          Tambah baris
         </button>
       </div>
     </div>
   );
 }
 
+function StandardField({ field }: { field: FormField }) {
+  const {
+    register,
+    formState: { errors },
+  } = useFormContext<DynamicFormInputs>();
+
+  const validation = {
+    required: field.required,
+  };
+
+  const sharedClassName = `
+    form-input
+    disabled:cursor-not-allowed
+    disabled:bg-slate-50
+    disabled:text-slate-500
+  `;
+
+  const hasError = Boolean(errors[field.name]);
+
+  const renderField = () => {
+    if (field.type === 'textarea') {
+      return (
+        <textarea
+          {...register(field.name, validation)}
+          defaultValue={
+            typeof field.value === 'string'
+              ? field.value
+              : undefined
+          }
+          disabled={field.editable === false}
+          rows={4}
+          className={`${sharedClassName} min-h-[108px] resize-y py-3`}
+        />
+      );
+    }
+
+    if (field.type === 'select') {
+      return (
+        <select
+          {...register(field.name, validation)}
+          defaultValue={
+            typeof field.value === 'string'
+              ? field.value
+              : ''
+          }
+          disabled={field.editable === false}
+          className="form-select disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
+        >
+          <option value="">Pilih salah satu</option>
+
+          {(field.options ?? []).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      );
+    }
+
+    return (
+      <input
+        type={field.type || 'text'}
+        {...register(field.name, validation)}
+        defaultValue={
+          typeof field.value === 'string' ||
+          typeof field.value === 'number'
+            ? field.value
+            : undefined
+        }
+        disabled={field.editable === false}
+        className={sharedClassName}
+      />
+    );
+  };
+
+  return (
+    <div>
+      <label className="form-label">
+        {formatLabel(field.label || field.name)}
+
+        {field.required && (
+          <span className="ml-0.5 text-rose-600">*</span>
+        )}
+      </label>
+
+      {renderField()}
+
+      {hasError && (
+        <p className="mt-1.5 text-xs text-rose-600">
+          {fieldErrorMessage(field)}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function StudentTemplateForm() {
   const { templateId } = useParams<{ templateId: string }>();
   const navigate = useNavigate();
-  const methods = useForm<DynamicFormInputs>({ defaultValues: {} });
-  const { register, handleSubmit, control, formState: { errors } } = methods;
 
-  const [template, setTemplate] = useState<TemplateDetail | null>(null);
+  const methods = useForm<DynamicFormInputs>({
+    defaultValues: {},
+  });
 
-  useEffect(() => {
-    const fetchSchema = async () => {
-      if (!templateId) return;
-      try {
-        const data = await ApiService.getStudentFormSchema(templateId);
-        setTemplate({
-          id: data.template.id,
-          name: data.template.name,
-          description: data.template.description,
-          form_schema: data.form_schema,
-        });
-      } catch (err) {
-        console.error("Failed to load template schema", err);
-      }
-    };
-    fetchSchema();
-  }, [templateId]);
+  const {
+    handleSubmit,
+    formState: { isSubmitting },
+  } = methods;
 
-  const onSubmit: SubmitHandler<DynamicFormInputs> = async (formFields) => {
-    const studentData = localStorage.getItem("studentData");
-    if (!studentData) {
-      toast.error("Data mahasiswa tidak ditemukan. Silakan isi formulir mahasiswa terlebih dahulu.");
-      navigate("/");
+  const [template, setTemplate] =
+    useState<TemplateDetail | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(
+    null
+  );
+
+  const fetchSchema = async () => {
+    if (!templateId) {
+      setLoadError('Template tidak ditemukan.');
+      setLoading(false);
       return;
     }
-    const parsedStudent = JSON.parse(studentData);
-    const payload: StudentFormData = {
-      ...parsedStudent,
-      template_id: templateId!,
-      form_data: formFields,
-    };
+
     try {
-      await ApiService.submitStudentRequest(payload);
-      toast.success("Pengajuan surat berhasil dikirim!");
-      navigate("/");
-    } catch (err) {
-      console.error("Failed to submit request", err);
-      toast.error("Gagal mengirim pengajuan surat.");
+      setLoading(true);
+      setLoadError(null);
+
+      const data =
+        await ApiService.getStudentFormSchema(templateId);
+
+      setTemplate({
+        id: data.template.id,
+        name: data.template.name,
+        description: data.template.description,
+        form_schema: {
+          sections: data.form_schema?.sections ?? [],
+        },
+      });
+    } catch (error: any) {
+      console.error('Failed to load template schema:', error);
+
+      setLoadError(
+        error?.detail ||
+          error?.message ||
+          'Gagal memuat formulir.'
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
-  if (!template) {
+  useEffect(() => {
+    fetchSchema();
+  }, [templateId]);
+
+  const orderedSections = useMemo(() => {
+    if (!template) return [];
+
+    return [...template.form_schema.sections]
+      .sort(
+        (first, second) =>
+          (first.order ?? 0) - (second.order ?? 0)
+      )
+      .map((section) => ({
+        ...section,
+        fields: [...section.fields].sort(
+          (first, second) =>
+            (first.order ?? 0) - (second.order ?? 0)
+        ),
+      }));
+  }, [template]);
+
+  const onSubmit: SubmitHandler<DynamicFormInputs> = async (
+    formFields
+  ) => {
+    if (!templateId) {
+      toast.error('Template tidak ditemukan.');
+      return;
+    }
+
+    const storedStudentData =
+      localStorage.getItem('studentData');
+
+    if (!storedStudentData) {
+      toast.error(
+        'Data mahasiswa tidak ditemukan. Silakan isi data mahasiswa terlebih dahulu.'
+      );
+      navigate('/');
+      return;
+    }
+
+    try {
+      const parsedStudentData = JSON.parse(
+        storedStudentData
+      );
+
+      const payload: StudentFormData = {
+        ...parsedStudentData,
+        template_id: templateId,
+        form_data: formFields,
+      };
+
+      await ApiService.submitStudentRequest(payload);
+
+      toast.success('Pengajuan surat berhasil dikirim.');
+
+      localStorage.removeItem('studentData');
+      navigate('/');
+    } catch (error: any) {
+      console.error('Failed to submit request:', error);
+
+      toast.error(
+        error?.detail ||
+          error?.message ||
+          'Gagal mengirim pengajuan surat.'
+      );
+    }
+  };
+
+  if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]">
-        <LoadingSpinner size="lg" text="Memuat formulir..." />
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <LoadingSpinner
+          size="lg"
+          text="Memuat formulir..."
+        />
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-[#F8FAFC] py-10">
-      <div className="max-w-3xl mx-auto mb-8 text-center">
-        <img src="/logo.png" alt="Logo" className="h-16 mx-auto mb-3" />
+  if (loadError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-md">
+          <ErrorMessage
+            message={loadError}
+            onRetry={fetchSchema}
+          />
+        </div>
+      </div>
+    );
+  }
 
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+  if (!template) return null;
+
+  return (
+    <main className="min-h-screen bg-slate-50 px-4 py-8 sm:py-10">
+      {/* Page heading */}
+      <header className="mx-auto mb-7 max-w-3xl text-center">
+        <img
+          src="/logo.png"
+          alt="Universitas Negeri Padang"
+          className="mx-auto h-16 w-16 object-contain"
+        />
+
+        <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
           Sistem Administrasi Surat
         </p>
 
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 sm:text-[26px]">
           {template.name}
         </h1>
-        <p className="text-sm text-slate-500 mt-1">{template.description}</p>
-      </div>
 
-      <div className="max-w-3xl mx-auto bg-white shadow-sm rounded-xl border border-slate-200 p-8">
+        {template.description && (
+          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+            {template.description}
+          </p>
+        )}
+      </header>
+
+      {/* Form card */}
+      <section className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-sm">
         <FormProvider {...methods}>
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
-            {template.form_schema.sections?.map((section, sIdx) => (
-              <div key={sIdx} className="border-b border-slate-200 pb-6 last:border-none">
-                <h2 className="text-base font-semibold text-slate-900 mb-4">{section.name}</h2>
-                {/* 2-column grid so short fields (Nim1, Prodi, dates)
-                    aren't stretched to the full card width — that
-                    stretch, not a missing background, was what made
-                    the page read as empty. Repeatable fields span
-                    both columns since they need room for their rows. */}
-                <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-                  {section.fields.map((field, fIdx) => (
-                    field.repeatable ? (
-                      <div key={fIdx} className="sm:col-span-2">
-                        <RepeatableField field={field} />
-                      </div>
-                    ) : (
-                      <div key={fIdx}>
-                        <label className="form-label">
-                          {formatLabel(field.label)} {field.required && <span className="text-rose-600">*</span>}
-                        </label>
-                        <input
-                          type={field.type || "text"}
-                          {...register(field.name, { required: field.required })}
-                          className="form-input"
-                        />
-                        {errors[field.name] && <p className="text-rose-600 text-xs mt-1.5">{formatLabel(field.label)} wajib diisi</p>}
-                      </div>
-                    )
-                  ))}
+          <form onSubmit={handleSubmit(onSubmit)}>
+            <div className="space-y-7 px-6 py-7 sm:px-8 sm:py-8">
+              {orderedSections.length === 0 ? (
+                <div className="py-8 text-center">
+                  <p className="text-sm font-medium text-slate-700">
+                    Tidak ada field yang perlu diisi
+                  </p>
+
+                  <p className="mt-1 text-[13px] text-slate-500">
+                    Silakan hubungi administrator jika formulir
+                    tidak sesuai.
+                  </p>
                 </div>
-              </div>
-            ))}
-            <div className="flex justify-end mt-4">
+              ) : (
+                orderedSections.map((section, sectionIndex) => (
+                  <section
+                    key={
+                      section.id ||
+                      `${section.name}-${sectionIndex}`
+                    }
+                    className="
+                      border-b border-slate-200 pb-7
+                      last:border-b-0 last:pb-0
+                    "
+                  >
+                    <div className="mb-5">
+                      <h2 className="text-base font-semibold text-slate-900">
+                        {section.name}
+                      </h2>
+
+                      {section.description && (
+                        <p className="mt-1 text-[13px] leading-5 text-slate-500">
+                          {section.description}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
+                      {section.fields.map((field) => {
+                        const isFullWidth =
+                          field.repeatable ||
+                          field.width === 'full';
+
+                        return (
+                          <div
+                            key={field.name}
+                            className={
+                              isFullWidth
+                                ? 'sm:col-span-2'
+                                : ''
+                            }
+                          >
+                            {field.repeatable ? (
+                              <RepeatableField
+                                field={field}
+                              />
+                            ) : (
+                              <StandardField
+                                field={field}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))
+              )}
+            </div>
+
+            {/* Form actions */}
+            <footer className="flex items-center justify-end border-t border-slate-200 bg-slate-50/60 px-6 py-4 sm:px-8">
               <button
                 type="submit"
-                className="btn-primary px-6 h-11"
+                disabled={
+                  isSubmitting ||
+                  orderedSections.length === 0
+                }
+                className="btn-primary h-11 min-w-[150px] px-6"
               >
-                Kirim Pengajuan
+                {isSubmitting ? (
+                  <LoadingSpinner
+                    size="sm"
+                    text="Mengirim..."
+                  />
+                ) : (
+                  'Kirim Pengajuan'
+                )}
               </button>
-            </div>
+            </footer>
           </form>
         </FormProvider>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }
 

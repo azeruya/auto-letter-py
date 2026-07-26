@@ -31,6 +31,7 @@ from ..services.excel_exporter import ExcelExporter
 from ..services.email_service import EmailService
 from ..config import settings
 from ..utils.security import require_admin, get_current_user, check_rate_limit, validate_file_upload, sanitize_filename
+from ..models.responses import FormLayoutUpdate
 
 # ROUTE CATALOG (for redundancy checks)
 # TEMPLATES (admin)
@@ -357,6 +358,120 @@ async def update_field_assignments(
     except Exception as e:
         logger.error(f"Field assignment update failed for template {template_id}: {e}")
         raise HTTPException(500, "Failed to update field assignments")
+    
+@router.put("/templates/{template_id}/form-layout")
+async def update_form_layout(
+    request: Request,
+    template_id: str,
+    layout: FormLayoutUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_admin),
+):
+    check_rate_limit(request, limit=20, window_minutes=1)
+
+    try:
+        template = (
+            db.query(Template)
+            .filter(Template.id == template_id)
+            .first()
+        )
+
+        if not template:
+            raise HTTPException(404, "Template not found")
+
+        placeholders = set(template.placeholders or [])
+
+        submitted_fields = [
+            field.name
+            for section in layout.sections
+            for field in section.fields
+        ]
+
+        submitted_set = set(submitted_fields)
+
+        if len(submitted_fields) != len(submitted_set):
+            raise HTTPException(
+                400,
+                "A field cannot appear in more than one section",
+            )
+
+        unknown_fields = submitted_set - placeholders
+        if unknown_fields:
+            raise HTTPException(
+                400,
+                f"Unknown fields: {sorted(unknown_fields)}",
+            )
+
+        missing_fields = placeholders - submitted_set
+        if missing_fields:
+            raise HTTPException(
+                400,
+                f"Fields missing from layout: {sorted(missing_fields)}",
+            )
+
+        normalized_sections = []
+
+        sorted_sections = sorted(
+            layout.sections,
+            key=lambda section: section.order,
+        )
+
+        for section_index, section in enumerate(sorted_sections):
+            sorted_fields = sorted(
+                section.fields,
+                key=lambda field: field.order,
+            )
+
+            normalized_sections.append({
+                "id": section.id,
+                "name": section.name.strip(),
+                "description": (
+                    section.description.strip()
+                    if section.description
+                    else ""
+                ),
+                "order": section_index,
+                "fields": [
+                    {
+                        **field.model_dump(),
+                        "order": field_index,
+                    }
+                    for field_index, field in enumerate(sorted_fields)
+                ],
+            })
+
+        template.schema = {
+            "sections": normalized_sections,
+        }
+
+        db.commit()
+        db.refresh(template)
+
+        logger.info(
+            "Form layout updated for template %s by %s",
+            template_id,
+            current_user.username,
+        )
+
+        return {
+            "success": True,
+            "message": "Form layout updated successfully",
+            "schema": template.schema,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "Form layout update failed for template %s: %s",
+            template_id,
+            exc,
+        )
+        raise HTTPException(
+            500,
+            "Failed to update form layout",
+        )
 
 @router.put("/templates/{template_id}")
 async def update_template(

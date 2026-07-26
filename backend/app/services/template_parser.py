@@ -1,3 +1,4 @@
+# backend/app/services/template_parser.py
 from docx import Document
 import re
 from typing import List, Dict, Any
@@ -122,6 +123,69 @@ class TemplateParser:
         return "text"
 
     def _generate_schema(self, placeholders: list) -> dict:
+        schema = {"sections": []}
+        grouped_fields: Dict[str, List[Dict[str, Any]]] = {}
+
+        for field in placeholders:
+            field_type = self._infer_field_type(field)
+
+            field_info = {
+                "name": field,
+                "label": self._humanize_field(field),
+                "type": field_type,
+                "required": True,
+                "repeatable": field.startswith("row."),
+                "order": 0,
+                "width": (
+                    "full"
+                    if field.startswith("row.") or field_type == "textarea"
+                    else "half"
+                ),
+            }
+
+            if field.startswith("row."):
+                grouped_fields.setdefault("table", []).append(field_info)
+                continue
+
+            matched_section = None
+
+            for section_name, keywords in self.field_groups.items():
+                if (
+                    "tanggal" in field.lower()
+                    and field.lower() != "tanggal"
+                ):
+                    matched_section = "content"
+                    break
+
+                if any(keyword in field.lower() for keyword in keywords):
+                    matched_section = section_name
+                    break
+
+            if not matched_section:
+                matched_section = "other"
+
+            grouped_fields.setdefault(matched_section, []).append(field_info)
+
+        for section_order, (section_key, fields) in enumerate(
+            grouped_fields.items()
+        ):
+            ordered_fields = [
+                {
+                    **field,
+                    "order": field_order,
+                }
+                for field_order, field in enumerate(fields)
+            ]
+
+            schema["sections"].append({
+                "id": section_key,
+                "name": self._translate_section_name(section_key),
+                "description": "",
+                "order": section_order,
+                "fields": ordered_fields,
+            })
+
+        return schema
         schema = {"sections": []}
         sections: Dict[str, List[Dict[str, Any]]] = {}
 
