@@ -1,7 +1,7 @@
 // src/types/index.ts
 
 export interface Template {
-  id: number;
+  id: string;
   name: string;
   category: string;
   original_filename: string;
@@ -30,7 +30,7 @@ export interface TemplateField {
 
 export interface UploadResponse {
   success: boolean;
-  template_id?: number;
+  template_id?: string;
   name?: string;
   field_count?: number;
   schema?: TemplateSchema;
@@ -111,19 +111,26 @@ export interface ChangePasswordRequest {
   new_password: string;
 }
 
+export interface DashboardRequestItem {
+  id: string;
+  tracking_id: string;
+  student_name: string;
+  template_name: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'rejected';
+  created_at: string;
+}
+
 export interface DashboardStats {
-  status_counts: Record<string, number>;
+  status_counts: {
+    pending: number;
+    in_progress?: number;
+    completed: number;
+    rejected: number;
+  };
   total_requests: number;
   pending_requests: number;
-  recent_requests: {
-    id: string;
-    tracking_id: string;
-    student_name: string;
-    template_name: string;
-    status: string;
-    created_at: string;
-  }[];
-  popular_templates: { name: string; usage_count: number }[];
+  recent_requests: DashboardRequestItem[];
+  popular_templates: Array<Record<string, unknown>>;
 }
 
 export interface LoginResponse {
@@ -133,9 +140,44 @@ export interface LoginResponse {
 }
 
 export interface RequestItem {
-  id: number;
+  id: string;
+  tracking_id: string;
+  student: {
+    nama: string;
+    nim: string;
+    email: string;
+    program_studi: string;
+  };
+  template: {
+    id: string;
+    name: string;
+  };
+  keperluan: string;
+  status: "pending" | "in_progress" | "completed" | "rejected";
+  student_data?: Record<string, any>;
+  admin_data?: Record<string, any>;
+  admin_notes?: string | null;
+  created_at: string;
+
+  generated_documents?: GeneratedDocument[];
+}
+
+export interface GeneratedDocument {
+  id: string;
+  filename: string;
+  created_at: string;
+  format?: string; // optional, since backend may or may not return it
+}
+
+export interface TrackingResponse {
+  tracking_id: string;
+  status: string;
+  status_description: string;
   student_name: string;
   template_name: string;
-  status: "pending" | "approved" | "rejected";
+  keperluan: string;
   created_at: string;
+  processed_at?: string | null;
+  completed_at?: string | null;
+  admin_notes?: string | null;
 }

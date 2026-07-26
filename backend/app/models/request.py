@@ -1,5 +1,5 @@
 # backend/app/models/request.py
-from sqlalchemy import Column, String, DateTime, Text, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, String, DateTime, Text, Boolean, ForeignKey, JSON, Enum as SqlEnum
 from sqlalchemy.orm import relationship
 from ..database import Base
 from datetime import datetime

@@ -20,23 +20,6 @@ const initialForm = {
   password: '',
 };
 
-// Same rotation used on Dashboard's and Requests' tables, so avatar
-// colors stay consistent across every table in the app.
-const avatarPalette = [
-  'bg-slate-900/5 text-slate-900',
-  'bg-indigo-50 text-indigo-600',
-  'bg-teal-50 text-teal-600',
-  'bg-sky-50 text-sky-600',
-  'bg-violet-50 text-violet-600',
-];
-
-const getAvatarStyle = (name: string) => {
-  const index = name
-    .split('')
-    .reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return avatarPalette[index % avatarPalette.length];
-};
-
 const AdminManagement: React.FC = () => {
   const [admins, setAdmins] = useState<Admin[]>([]);
   const [form, setForm] = useState(initialForm);
@@ -112,7 +95,7 @@ const AdminManagement: React.FC = () => {
     <div className="space-y-6">
       {/* Page header */}
       <div>
-        <p className="text-sm font-medium text-slate-500">
+        <p className="text-sm font-medium text-blue-700">
           Pengaturan akses
         </p>
 
@@ -128,38 +111,34 @@ const AdminManagement: React.FC = () => {
       {/* Summary */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-medium text-slate-500">
-                Total Administrator
+                Total administrator
               </p>
               <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
                 {admins.length}
               </p>
             </div>
 
-            {/* Primary/summary metric — same navy treatment as the
-                Total Permohonan card on Dashboard, not an unrelated
-                blue. shrink-0 keeps the badge from being squeezed
-                by its flex sibling. */}
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900/5 text-slate-900">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
               <Users size={20} />
             </div>
           </div>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-medium text-slate-500">
-                Pernah Masuk
+                Pernah masuk
               </p>
               <p className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
                 {admins.filter((admin) => admin.last_login).length}
               </p>
             </div>
 
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
               <ShieldCheck size={20} />
             </div>
           </div>
@@ -203,17 +182,17 @@ const AdminManagement: React.FC = () => {
               <table className="w-full min-w-[760px]">
                 <thead className="bg-slate-50">
                   <tr className="border-b border-slate-200">
-                    <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Administrator
                     </th>
-                    <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">
-                      Nama Pengguna
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Nama pengguna
                     </th>
-                    <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Dibuat
                     </th>
-                    <th className="px-5 py-3 text-left text-xs font-medium text-slate-500">
-                      Terakhir Masuk
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Terakhir masuk
                     </th>
                   </tr>
                 </thead>
@@ -226,11 +205,7 @@ const AdminManagement: React.FC = () => {
                     >
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
-                          <div
-                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${getAvatarStyle(
-                              admin.full_name || admin.username || 'A'
-                            )}`}
-                          >
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-600">
                             {(admin.full_name ||
                               admin.username ||
                               'A')
@@ -280,7 +255,7 @@ const AdminManagement: React.FC = () => {
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm xl:sticky xl:top-24">
           <div className="border-b border-slate-200 px-5 py-4">
             <div className="flex items-center gap-2">
-              <Plus size={18} className="text-slate-900" />
+              <Plus size={18} className="text-blue-700" />
               <h3 className="text-base font-semibold text-slate-900">
                 Tambah Administrator
               </h3>

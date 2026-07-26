@@ -25,6 +25,11 @@ router = APIRouter(prefix="/api/student", tags=["student"])
 field_service = FieldAssignmentService()
 email_service = EmailService()
 
+@router.get("/keperluan")
+def get_keperluan_options(db: Session = Depends(get_db)):
+    templates = db.query(Template).filter(Template.is_active == True).all()
+    return [{"value": t.name, "key": str(t.id)} for t in templates]
+
 @router.post("/submit-request", response_model=RequestSubmissionResponse)
 async def submit_letter_request(
     request: Request,
@@ -160,6 +165,7 @@ async def list_available_templates(request: Request, db: Session = Depends(get_d
                 "field_count": len(t.placeholders or []),
                 "student_fields_count": student_fields_count,
                 "usage_count": t.usage_count or 0,
+                "is_active": t.is_active,
                 "created_at": t.created_at.isoformat() if t.created_at else None  # ✅ safe conversion
             })
         

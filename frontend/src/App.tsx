@@ -3,7 +3,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { Toaster } from 'react-hot-toast';
 import Layout from './components/Layout';
 import StudentForm from './pages/StudentForm';
-import StudentTemplateList from './pages/StudentTemplateList';
 import Login from './pages/Login';
 import Register from "./pages/Register";
 import AdminManagement from "./pages/AdminManagement";
@@ -11,12 +10,26 @@ import Stats from "./pages/Stats";
 import Requests from './pages/Requests';
 import Templates from './pages/Templates';
 import StudentTemplateForm from './pages/StudentTemplateForm';
-import AdminDashboardLayout from "./pages/AdminDashboardLayout";
+import ProcessRequest from './pages/ProcessRequest';
+import TrackRequest from './pages/TrackRequest';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import LoadingSpinner from './components/LoadingSpinner';
 
-const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
-  const { token } = useAuth();
-  return token ? children : <Navigate to="/login" replace />;
+// Protected route wrapper
+const ProtectedRoute = ({
+  children,
+}: {
+  children: JSX.Element;
+}) => {
+  const { token, initializing } = useAuth();
+
+  if (initializing) {
+    return <LoadingSpinner />;
+  }
+
+  return token
+    ? children
+    : <Navigate to="/login" replace />;
 };
 
 function App() {
@@ -24,27 +37,63 @@ function App() {
     <Router>
       <AuthProvider>
         <div className="App">
-          <Layout>
-            <Routes>
-              {/* public routes */}
-              <Route path="/" element={<StudentForm />} />
-              <Route path="/templates" element={<StudentTemplateList />} />
-              <Route path="/templates/:templateId/form" element={<StudentTemplateForm />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
+          <Routes>
+            {/* Public routes */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/" element={<StudentForm />} />
+            <Route path="/templates/:templateId/form" element={<StudentTemplateForm />} />
+            <Route path="/track" element={<TrackRequest />} />
+        
+            {/* Routes using Layout (top navbar + optional sidebar) */}
+            <Route element={<Layout showHeader={true} />}>
 
-              {/* protected admin routes */}
-              <Route path="/dashboard" element={<ProtectedRoute><AdminDashboardLayout /></ProtectedRoute>}>
-                <Route index element={<Stats />} />
-                <Route path="admins" element={<AdminManagement />} />
-                <Route path="requests" element={<Requests />} />
-                <Route path="templates" element={<Templates />} />
-              </Route>
+              {/* Admin pages (protected, sidebar + top navbar) */}
+              <Route
+                path="/dashboard"
+                element={
+                  <ProtectedRoute>
+                    <Stats />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dashboard/admins"
+                element={
+                  <ProtectedRoute>
+                    <AdminManagement />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dashboard/requests"
+                element={
+                  <ProtectedRoute>
+                    <Requests />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dashboard/templates"
+                element={
+                  <ProtectedRoute>
+                    <Templates />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/dashboard/requests/:id/process"
+                element={
+                  <ProtectedRoute>
+                    <ProcessRequest />
+                  </ProtectedRoute>
+                }
+              />
+            </Route>
 
-              {/* Fallback */}
-              <Route path="*" element={<Navigate to="/" />} />
-            </Routes>
-          </Layout>
+            {/* fallback */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
 
           <Toaster position="top-right" />
         </div>
@@ -52,6 +101,5 @@ function App() {
     </Router>
   );
 }
-
 
 export default App;

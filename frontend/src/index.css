@@ -4,24 +4,90 @@
 
 @layer base {
   html {
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family:
+      'Inter',
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      sans-serif;
+    background-color: #f6f7f9;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    color: #0f172a;
+    background-color: #f6f7f9;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    margin: 0;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500;
+    @apply inline-flex items-center justify-center rounded-lg
+      bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white
+      shadow-sm transition duration-150
+      hover:bg-slate-800
+      focus:outline-none focus:ring-4 focus:ring-slate-200
+      disabled:cursor-not-allowed disabled:opacity-60;
   }
-  
+
   .btn-secondary {
-    @apply inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500;
+    @apply inline-flex items-center justify-center rounded-lg
+      border border-slate-300 bg-white px-4 py-2.5
+      text-sm font-semibold text-slate-700 shadow-sm
+      transition duration-150
+      hover:bg-slate-50
+      focus:outline-none focus:ring-4 focus:ring-slate-100
+      disabled:cursor-not-allowed disabled:opacity-60;
   }
-  
+
+  .form-label {
+    @apply mb-1.5 block text-[13px] font-medium text-slate-600;
+  }
+
   .form-input {
-    @apply block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm;
+    @apply block h-12 w-full rounded-lg
+      border border-slate-200 bg-white px-4
+      text-[13px] text-slate-900 outline-none
+      transition duration-150
+      placeholder:text-slate-400
+      hover:border-slate-300
+      focus:border-slate-700 focus:ring-4 focus:ring-slate-100;
   }
-  
+
   .form-select {
-    @apply block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500 sm:text-sm;
+    @apply block h-12 w-full rounded-lg
+      border border-slate-200 bg-white px-4
+      text-sm text-slate-900 outline-none
+      transition duration-150
+      hover:border-slate-300
+      focus:border-slate-700 focus:ring-4 focus:ring-slate-100;
+  }
+
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+
+  .error-message {
+    @apply rounded-lg border border-red-200 bg-red-50
+      px-4 py-3 text-[13px] text-red-700;
   }
 }

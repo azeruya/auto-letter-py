@@ -1,6 +1,9 @@
 // src/services/api.ts
 
-import axios from 'axios';
+import axios, {
+  AxiosError,
+  InternalAxiosRequestConfig,
+} from 'axios';
 import { 
   Template, 
   UploadResponse, 
@@ -13,32 +16,127 @@ import {
   Admin,
   ChangePasswordRequest,
   LoginResponse,
-  RequestItem
+  RequestItem, 
+  TrackingResponse,
+  DashboardStats
 } from '../types';
 
+// Create axios instance with default config
 const API_BASE_URL = 'http://localhost:8000';
 
-// Create axios instance with default config
+interface RetryRequestConfig extends InternalAxiosRequestConfig {
+  _retry?: boolean;
+}
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Response interceptor for error handling
+// Always use the newest access token.
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+
+  return config;
+});
+
+let refreshPromise: Promise<string> | null = null;
+
+const refreshAccessToken = async (): Promise<string> => {
+  // A separate Axios call prevents the refresh request from entering
+  // the same response interceptor.
+  const response = await axios.post(
+    `${API_BASE_URL}/api/auth/refresh`,
+    {},
+    {
+      withCredentials: true,
+      timeout: 30000,
+    }
+  );
+
+  const newToken = response.data.access_token as string;
+
+  localStorage.setItem('token', newToken);
+  apiClient.defaults.headers.common.Authorization =
+    `Bearer ${newToken}`;
+
+  window.dispatchEvent(
+    new CustomEvent('auth:token-refreshed', {
+      detail: newToken,
+    })
+  );
+
+  return newToken;
+};
+
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
-    const apiError: ApiError = {
-      message: 'Network error occurred',
-    };
 
-    if (error.response?.data) {
-      apiError.detail = error.response.data.detail || error.response.data.message;
-      apiError.message = error.response.data.message || error.message;
+  async (error: AxiosError) => {
+    const originalRequest =
+      error.config as RetryRequestConfig | undefined;
+
+    const statusCode = error.response?.status;
+    const requestUrl = originalRequest?.url ?? '';
+
+    const isAuthEndpoint =
+      requestUrl.includes('/api/auth/login') ||
+      requestUrl.includes('/api/auth/refresh');
+
+    if (
+      statusCode === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !isAuthEndpoint
+    ) {
+      originalRequest._retry = true;
+
+      try {
+        if (!refreshPromise) {
+          refreshPromise = refreshAccessToken().finally(() => {
+            refreshPromise = null;
+          });
+        }
+
+        const newToken = await refreshPromise;
+
+        originalRequest.headers.Authorization =
+          `Bearer ${newToken}`;
+
+        return apiClient(originalRequest);
+      } catch (refreshError) {
+        localStorage.removeItem('token');
+        ApiService.clearAuthToken();
+
+        window.dispatchEvent(
+          new CustomEvent('auth:session-expired')
+        );
+
+        return Promise.reject(refreshError);
+      }
     }
+
+    const responseData = error.response?.data as
+      | { detail?: string; message?: string }
+      | undefined;
+
+    const apiError: ApiError = {
+      message:
+        responseData?.message ||
+        error.message ||
+        'Network error occurred',
+      detail:
+        responseData?.detail ||
+        responseData?.message,
+    }; 
 
     return Promise.reject(apiError);
   }
@@ -64,6 +162,11 @@ export class ApiService {
     });
 
     return response.data as LoginResponse;
+  }
+
+  static async refreshToken(): Promise<LoginResponse> {
+    const response = await apiClient.post('/api/auth/refresh');
+    return response.data;
   }
 
   static async register(data: {
@@ -117,20 +220,14 @@ export class ApiService {
     delete apiClient.defaults.headers.common["Authorization"];
   }
 
-  // prev ver
-  static async generateDocument(
-    templateId: number, 
-    formData: FormDataType
-  ): Promise<Blob> {
-    const response = await apiClient.post(
-      `/api/documents/generate/${templateId}`, 
-      formData,
-      {
-        responseType: 'blob',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      }
+  static async trackRequest(tracking_id: string): Promise<TrackingResponse> {
+    const response = await apiClient.get(`/api/student/track/${tracking_id}`);
+    return response.data;
+  }
+
+  static async getDashboard(): Promise<DashboardStats> {
+    const response = await apiClient.get(
+      '/api/admin/dashboard'
     );
 
     return response.data;
@@ -166,56 +263,88 @@ export class ApiService {
     return response.data;
   }
 
-  // List requests with optional filters
-  static async listRequests(params?: {
+  // List requests
+  static async listRequests(params: {
     status?: string;
     limit?: number;
     offset?: number;
-  }) {
+  }): Promise<{ requests: RequestItem[]; total_count: number }> {
     const response = await apiClient.get("/api/admin/requests", { params });
     return response.data;
   }
 
-  // Process request (admin fills form)
-  static async processRequest(id: number, formData: any) {
-    const response = await apiClient.put(`/api/admin/requests/${id}/process`, formData);
+  // Get request details
+  static async getRequestDetails(id: string): Promise<any> {
+    const response = await apiClient.get(`/api/admin/requests/${id}`);
+    return response.data; // return { request, admin_form_schema }
+  }
+
+  // Process a request
+  static async processRequest(
+    id: string,
+    data: { form_data: Record<string, any>; admin_notes: string }
+  ) {
+    const response = await apiClient.put(`/api/admin/requests/${id}/process`, data);
     return response.data;
   }
 
-  // Generate approved request document
-  static async generateRequest(id: number) {
+  // Generate document (complete request)
+  static async generateRequest(id: string) {
     const response = await apiClient.post(`/api/admin/requests/${id}/generate`);
     return response.data;
   }
 
-  // Reject request with reason
-  static async rejectRequest(id: number, reason: string) {
+  // Reject a request
+  static async rejectRequest(id: string, reason: string) {
     const response = await apiClient.post(
       `/api/admin/requests/${id}/reject`,
-      { reason }, // wrapped in object for consistency
+      { rejection_reason: reason }, // ✅ send JSON object
       { headers: { "Content-Type": "application/json" } }
     );
     return response.data;
   }
 
-  static async getRequestDetails(id: number) {
-    const response = await apiClient.get(`/api/admin/requests/${id}`);
-    return response.data;
+  // services/api.ts
+  static async downloadDocument(docId: string) {
+    const response = await apiClient.get(`/api/admin/documents/${docId}/download`, {
+      responseType: "blob",
+    });
+
+    const blob = response.data; // already a Blob
+    const url = window.URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+
+    // get filename from headers if available
+    const contentDisposition = response.headers["content-disposition"];
+    let filename = `document_${docId}.docx`; // give default with extension
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="?(.+)"?/);
+      if (match?.[1]) filename = match[1];
+    }
+
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
   }
 
-  static async exportRequests() {
+  // Export all requests
+  static async exportRequests(): Promise<Blob> {
     const response = await apiClient.get(`/api/admin/export/requests`, {
-      responseType: "blob", // so we can download Excel file
+      responseType: "blob",
     });
     return response.data;
   }
 
-  static async exportDetailedRequests(requestIds: number[]) {
-    const response = await apiClient.post(
-      `/api/admin/export/requests/detailed`,
-      { request_ids: requestIds },
-      { responseType: "blob" }
-    );
+  // Export selected requests
+  static async exportDetailedRequests(ids: string[]): Promise<Blob> {
+    const response = await apiClient.post(`/api/admin/export/requests/detailed`, ids, {
+      responseType: "blob",
+      headers: { "Content-Type": "application/json" },
+    });
     return response.data;
   }
 
@@ -262,6 +391,11 @@ export class ApiService {
       `api/admin/templates/${templateId}/preview`,
       sampleData
     );
+    return response.data;
+  }
+
+  static async getKeperluanOptions(): Promise<{ key: string; value: string }[]> {
+    const response = await apiClient.get('/api/student/keperluan');
     return response.data;
   }
 

@@ -21,7 +21,7 @@ from ..models.admin import Admin
 from ..models.responses import (
     AdminFormData, DashboardStats, RequestListResponse, RequestDetailResponse,
     DocumentGenerationResponse, BaseResponse, ErrorResponse,
-    TemplateUploadResponse, TemplateListResponse, AdminListResponse
+    TemplateUploadResponse, TemplateListResponse, AdminListResponse, RejectRequest
 )
 from ..services.template_parser import TemplateParser
 from ..services.field_assignment import FieldAssignmentService
@@ -592,16 +592,19 @@ async def list_requests(
     check_rate_limit(request, limit=30, window_minutes=1)
     """List letter requests with filtering"""
     try:
-        query = db.query(LetterRequest)\
-            .options(joinedload(LetterRequest.student), joinedload(LetterRequest.template))
-        
+        query = db.query(LetterRequest).options(
+            joinedload(LetterRequest.student),
+            joinedload(LetterRequest.template),
+            joinedload(LetterRequest.documents),  # ✅ fix here
+        )
+
         if status:
             query = query.filter(LetterRequest.status == status)
-        
+
         total_count = query.count()
         requests = query.order_by(desc(LetterRequest.created_at))\
             .offset(offset).limit(limit).all()
-        
+
         return RequestListResponse(
             success=True,
             message=f"Retrieved {len(requests)} requests",
@@ -622,14 +625,24 @@ async def list_requests(
                     "keperluan": req.keperluan,
                     "status": req.status,
                     "created_at": req.created_at.isoformat(),
-                    "admin_notes": req.admin_notes
+                    "admin_notes": req.admin_notes,
+                    "generated_documents": [
+                        {
+                            "id": doc.id,
+                            "filename": doc.filename,
+                            "document_type": doc.document_type,
+                            "mime_type": doc.mime_type,
+                            "created_at": doc.created_at.isoformat()
+                        }
+                        for doc in req.documents
+                    ] if req.documents else []
                 }
                 for req in requests
             ],
             total_count=total_count,
             has_more=offset + limit < total_count
         )
-        
+
     except Exception as e:
         logger.error(f"List requests error: {e}")
         raise HTTPException(500, "Failed to retrieve requests")
@@ -661,10 +674,15 @@ async def get_request_details(
             template.field_assignments = json.loads(template.field_assignments)
         # --------------------------------
 
+        # --- Ensure schema has a title ---
+        if "title" not in template.schema:
+            template.schema["title"] = template.name
+
         # Get admin form schema
         logger.info(f"Template.id={template.id} schema type={type(template.schema)} field_assignments type={type(template.field_assignments)}")
         logger.info(f"Template.schema: {template.schema}")
         logger.info(f"Template.field_assignments: {template.field_assignments}")
+        
         # Normalize schema fields
         for section in template.schema.get("sections", []):
             section["fields"] = [
@@ -686,14 +704,26 @@ async def get_request_details(
                 },
                 "template": {
                     "id": template.id,
-                    "name": template.name
+                    "name": template.name,
+                    "schema": template.schema,  # ✅ send schema to frontend
+                    "field_assignments": template.field_assignments
                 },
                 "keperluan": letter_request.keperluan,
                 "status": letter_request.status,
                 "student_data": letter_request.student_data,
                 "admin_data": letter_request.admin_data,
                 "admin_notes": letter_request.admin_notes,
-                "created_at": letter_request.created_at.isoformat()
+                "created_at": letter_request.created_at.isoformat(),
+                "generated_documents": [
+                    {
+                        "id": doc.id,
+                        "filename": doc.filename,
+                        "format": doc.document_type,
+                        "mime_type": doc.mime_type,
+                        "created_at": doc.created_at.isoformat()
+                    }
+                    for doc in letter_request.documents
+                ] if letter_request.documents else []
             },
             admin_form_schema=admin_schema
         )
@@ -703,6 +733,7 @@ async def get_request_details(
     except Exception as e:
         logger.error(f"Get request details error: {e}")
         raise HTTPException(500, "Failed to retrieve request details")
+
 
 @router.put("/requests/{request_id}/process", response_model=BaseResponse)
 async def process_request(
@@ -723,16 +754,23 @@ async def process_request(
         if letter_request.status != "pending":
             raise HTTPException(400, "Request is not in pending status")
         
+        # Ensure schema always has a title
+        if "title" not in letter_request.template.schema:
+            letter_request.template.schema["title"] = letter_request.template.name
+
         # Validate admin form data
         validation = field_service.validate_required_fields(
             letter_request.template, admin_data.form_data, "admin"
         )
         
         if not validation["valid"]:
-            raise HTTPException(400, {
-                "message": "Missing required admin fields",
-                "missing_fields": validation["missing_fields"]
-            })
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Missing required admin fields",
+                    "missing_fields": validation["missing_fields"]
+                }
+            )
         
         # Update request
         letter_request.admin_data = admin_data.form_data
@@ -756,6 +794,7 @@ async def process_request(
         db.rollback()
         logger.error(f"Process request error: {e}")
         raise HTTPException(500, f"Processing failed: {str(e)}")
+
 
 @router.post("/requests/{request_id}/generate", response_model=DocumentGenerationResponse)
 async def generate_document(
@@ -799,13 +838,13 @@ async def generate_document(
                 # Create document record
                 doc = GeneratedDocument(
                     request_id=letter_request.id,
-                    filename=f"{letter_request.student.nama}_{letter_request.template.name}_{format_type}",
+                    filename=f"{letter_request.student.nama}_{letter_request.template.name}.{format_type}",  # <-- add dot
                     file_path=result["file_path"],
                     document_type=format_type,
                     file_size=result["metadata"]["file_size"],
                     mime_type=result["metadata"]["mime_type"]
                 )
-                
+
                 # Upload to Google Drive if configured
                 if drive_uploader:
                     try:
@@ -824,8 +863,12 @@ async def generate_document(
                         logger.error(f"Drive upload failed: {upload_error}")
                         doc.upload_error = str(upload_error)
                 
+                logger.info(f"Generated doc -> filename={doc.filename}, mime={doc.mime_type}, path={doc.file_path}")
+
                 db.add(doc)
+                db.flush()
                 generated_docs.append({
+                    "id": doc.id,
                     "format": format_type,
                     "success": True,
                     "drive_uploaded": doc.uploaded_to_drive
@@ -865,16 +908,34 @@ async def generate_document(
         logger.error(f"Document generation error: {e}")
         raise HTTPException(500, f"Document generation failed: {str(e)}")
 
+
+@router.get("/documents/{doc_id}/download")
+async def download_document(
+    doc_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_admin)  # ensure only admins can download
+):
+    doc = db.query(GeneratedDocument).filter_by(id=doc_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if not os.path.exists(doc.file_path):
+        raise HTTPException(404, "File missing on server")
+
+    return FileResponse(
+        path=doc.file_path,
+        media_type=doc.mime_type,
+        filename=doc.filename
+    )
+
 @router.post("/requests/{request_id}/reject", response_model=BaseResponse)
 async def reject_request(
     request_id: str,
-    rejection_reason: str,
+    body: RejectRequest,  # <--- expects JSON { "rejection_reason": "..." }
     request: Request,
     db: Session = Depends(get_db),
     current_user = Depends(require_admin)
 ):
     check_rate_limit(request, limit=20, window_minutes=1)
-    """Reject a request"""
     try:
         letter_request = db.query(LetterRequest)\
             .options(joinedload(LetterRequest.student))\
@@ -887,7 +948,7 @@ async def reject_request(
             raise HTTPException(400, f"Request already {letter_request.status}")
         
         letter_request.status = "rejected"
-        letter_request.admin_notes = rejection_reason
+        letter_request.admin_notes = body.rejection_reason   # ✅ from body
         letter_request.processed_at = datetime.utcnow()
         letter_request.processed_by = current_user.id
         
@@ -895,11 +956,7 @@ async def reject_request(
         
         logger.info(f"Request {request_id} rejected by admin {current_user.username}")
         
-        return BaseResponse(
-            success=True,
-            message="Request rejected successfully"
-        )
-        
+        return BaseResponse(success=True, message="Request rejected successfully")
     except HTTPException:
         raise
     except Exception as e:
@@ -941,7 +998,7 @@ async def export_requests(
 @router.post("/export/requests/detailed")
 async def export_detailed_requests(
     request: Request,
-    request_ids: List[int],  # admin provides IDs in body
+    request_ids: List[str],  # admin provides IDs in body
     db: Session = Depends(get_db),
     current_user = Depends(require_admin)
 ):

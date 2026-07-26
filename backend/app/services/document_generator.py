@@ -6,7 +6,11 @@ import re
 from typing import Dict, Any, List, Tuple, Optional
 import subprocess
 import platform
-from datetime import datetime  # FIXED: Added missing import
+from datetime import datetime 
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 class DocumentGenerator:
     def __init__(self):
@@ -25,14 +29,14 @@ class DocumentGenerator:
             else:
                 # Try LibreOffice
                 result = subprocess.run(['libreoffice', '--version'], 
-                                      capture_output=True, text=True, timeout=5)
+                    capture_output=True, text=True, timeout=5)
                 return result.returncode == 0
         except Exception as e:
-            print(f"PDF conversion check failed: {e}")
+            logger.error(f"PDF conversion check failed: {e}")
             return False
     
     def generate_document(self, template_path: str, user_data: Dict[str, Any], 
-                         output_format: str = "docx") -> Tuple[str, Dict[str, Any]]:
+            output_format: str = "docx") -> Tuple[str, Dict[str, Any]]:
         """Generate a document from template and user data
         
         Returns:
@@ -90,12 +94,18 @@ class DocumentGenerator:
             
         except Exception as e:
             # Cleanup any temporary files
-            for temp_file in [locals().get('temp_docx'), locals().get('temp_pdf')]:
-                if temp_file and hasattr(temp_file, 'name') and os.path.exists(temp_file.name):
-                    try:
-                        os.unlink(temp_file.name)
-                    except:
-                        pass
+            for temp_file in ["temp_docx", "temp_pdf"]:
+                path = locals().get(temp_file)
+                if path:
+                    if hasattr(path, "name"):
+                        file_path = path.name
+                    else:
+                        file_path = path
+                    if os.path.exists(file_path):
+                        try:
+                            os.unlink(file_path)
+                        except Exception as cleanup_err:
+                            logger.error(f"Failed to clean up {file_path}: {cleanup_err}")
             raise Exception(f"Document generation failed: {str(e)}")
     
     def _convert_to_pdf(self, docx_path: str, pdf_path: str) -> bool:
@@ -127,7 +137,7 @@ class DocumentGenerator:
                         return True
                 return False
         except Exception as e:
-            print(f"PDF conversion error: {e}")
+            logger.error(f"PDF conversion error: {e}")
             return False
     
     def _get_mime_type(self, format_type: str) -> str:

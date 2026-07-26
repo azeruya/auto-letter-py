@@ -89,8 +89,11 @@ class FieldAssignmentService:
     
     import json
 
-    def get_student_form_schema(self, template: Template) -> Dict[str, Any]:
-        """Generate form schema for student-fillable fields"""
+    def get_student_form_schema(self, template: Template, student_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Generate form schema for student-fillable fields with special cases:
+        - keperluan → dropdown from enum
+        - nama/nim → locked + prefilled with student_data
+        """
 
         # --- Ensure JSON fields are parsed ---
         field_assignments = template.field_assignments
@@ -130,12 +133,52 @@ class FieldAssignmentService:
                 logger.info(f"  Processing field: {field} (type={type(field)})")
 
                 # If schema stores fields as strings
-                if isinstance(field, str):
-                    if field in student_fields:
-                        student_section_fields.append({"name": field, "label": field.capitalize(), "type": "text", "required": True})
+                if isinstance(field, str) and field in student_fields:
+                    if field == "keperluan":
+                        student_section_fields.append({
+                            "name": "keperluan",
+                            "label": "Keperluan",
+                            "type": "select",
+                            "options": [k.value for k in KeperluanEnum],
+                            "required": True,
+                            "editable": True
+                        })
+                    elif field in ["nama", "nim"]:
+                        student_section_fields.append({
+                            "name": field,
+                            "label": field.capitalize(),
+                            "type": "text",
+                            "value": (student_data or {}).get(field, ""),
+                            "required": True,
+                            "editable": False
+                        })
+                    else:
+                        student_section_fields.append({
+                            "name": field,
+                            "label": field.capitalize(),
+                            "type": "text",
+                            "required": True,
+                            "editable": True
+                        })
+
                 # If schema stores fields as dicts
-                elif isinstance(field, dict):
-                    if field.get("name") in student_fields:
+                elif isinstance(field, dict) and field.get("name") in student_fields:
+                    fname = field["name"]
+
+                    if fname == "keperluan":
+                        student_section_fields.append({
+                            **field,
+                            "type": "select",
+                            "options": [k.value for k in KeperluanEnum],
+                            "editable": True
+                        })
+                    elif fname in ["nama", "nim"]:
+                        student_section_fields.append({
+                            **field,
+                            "value": (student_data or {}).get(fname, ""),
+                            "editable": False
+                        })
+                    else:
                         student_section_fields.append(field)
 
             if student_section_fields:
@@ -148,31 +191,46 @@ class FieldAssignmentService:
         return filtered_schema
     
     def get_admin_form_schema(self, template: Template) -> Dict[str, Any]:
-        """Generate form schema for admin-fillable fields"""
+        """Generate form schema for admin-fillable fields (supports string and dict fields)"""
         if not template.field_assignments or not template.schema:
             return {"sections": []}
-        
+
         admin_fields = set(template.field_assignments.get("admin_fields", []))
-        
-        # Filter schema to only include admin fields
         filtered_schema = {"sections": []}
-        
+
         for section in template.schema.get("sections", []):
             admin_section_fields = []
-            
+
             for field in section.get("fields", []):
-                if field["name"] in admin_fields:
-                    admin_section_fields.append(field)
-            
+                # --- Field stored as string ---
+                if isinstance(field, str) and field in admin_fields:
+                    admin_section_fields.append({
+                        "name": field,
+                        "label": field.capitalize(),
+                        "type": "text",
+                        "required": True,
+                        "editable": True
+                    })
+
+                # --- Field stored as dict ---
+                elif isinstance(field, dict) and field.get("name") in admin_fields:
+                    # Copy existing dict and ensure required keys exist
+                    admin_section_fields.append({
+                        **field,
+                        "type": field.get("type", "text"),
+                        "required": field.get("required", True),
+                        "editable": field.get("editable", True)
+                    })
+
             if admin_section_fields:
                 filtered_schema["sections"].append({
-                    "name": section["name"],
-                    "title": section["title"],
+                    "name": section.get("name"),
+                    "title": section.get("title", section.get("name")),
                     "fields": admin_section_fields
                 })
-        
+
         return filtered_schema
-    
+
     def generate_auto_fields(self, template: Template, request_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Generate values for auto-generate fields"""
         if not template.field_assignments:
@@ -210,23 +268,59 @@ class FieldAssignmentService:
         
         return auto_values
     
-    def merge_all_field_data(self, template: Template, student_data: Dict[str, Any],
-        admin_data: Dict[str, Any], request_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Merge student data, admin data, and auto-generated data"""
-        merged_data = {}
-        
-        # Add student data
+    def merge_all_field_data(
+        self,
+        template: Template,
+        student_data: dict[str, Any],
+        admin_data: dict[str, Any],
+        request_data: Optional[Dict[str, Any]] = None
+    ) -> dict[str, Any]:
+        """
+        Merge student data, admin data, and auto-generated data.
+        Automatically handles repeatable fields (row.*) as lists of dicts.
+        """
+        merged_data: dict[str, Any] = {}
+
+        # --- Helper to normalize repeatable fields ---
+        def normalize_repeatable(field_name: str, value: Any):
+            if isinstance(value, list):
+                # Already a list of dicts or values -> convert each item to dict if not dict
+                return [item if isinstance(item, dict) else {"value": item} for item in value]
+            else:
+                # Single value -> wrap in list of dict
+                return [{"value": value}]
+
+        # --- Gather repeatable field names from template.schema ---
+        repeatable_fields = set()
+        for section in template.schema.get("sections", []):
+            for field in section.get("fields", []):
+                # Field can be dict or string
+                if isinstance(field, dict):
+                    if field.get("repeatable") or field.get("name", "").startswith("row."):
+                        repeatable_fields.add(field["name"])
+                elif isinstance(field, str) and field.startswith("row."):
+                    repeatable_fields.add(field)
+
+        # --- Merge student data ---
         if student_data:
-            merged_data.update(student_data)
-        
-        # Add admin data
+            for key, value in student_data.items():
+                if key in repeatable_fields:
+                    merged_data[key] = normalize_repeatable(key, value)
+                else:
+                    merged_data[key] = value
+
+        # --- Merge admin data ---
         if admin_data:
-            merged_data.update(admin_data)
-        
-        # Add auto-generated data
+            for key, value in admin_data.items():
+                if key in repeatable_fields:
+                    merged_data[key] = normalize_repeatable(key, value)
+                else:
+                    merged_data[key] = value
+
+        # --- Add auto-generated fields ---
         auto_data = self.generate_auto_fields(template, request_data)
         merged_data.update(auto_data)
-        
+
         return merged_data
     
     def validate_required_fields(self, template: Template, data: Dict[str, Any], 

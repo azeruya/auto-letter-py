@@ -22,19 +22,23 @@ class TemplateUploadResponse(BaseResponse):
     schema: Optional[Dict[str, Any]] = None
     field_assignments: Optional[Dict[str, List[str]]] = None
 
+# for student ?
 class TemplateListItem(BaseModel):
     id: str
     name: str
     category: str
     original_filename: str
+    description: Optional[str] = None
     field_count: int
     usage_count: int
+    is_active: bool
     created_at: Optional[str] = None
 
 class TemplateListResponse(BaseResponse):
     templates: List[TemplateListItem]
     total_count: int
 
+# for admin ?
 class TemplateDetailResponse(BaseModel):
     id: str
     name: str
@@ -85,12 +89,27 @@ class DocumentsResponse(BaseModel):
 class AdminListResponse(BaseResponse):
     admins: List[dict]
 
+class DashboardRequestItem(BaseModel):
+    id: str
+    tracking_id: str
+    student_name: str
+    template_name: str
+    status: str
+    created_at: str
+
 class DashboardStats(BaseModel):
     status_counts: Dict[str, int]
     total_requests: int
     pending_requests: int
-    recent_requests: List[Dict[str, Any]]
+    recent_requests: List[DashboardRequestItem]
     popular_templates: List[Dict[str, Any]]
+    
+class GeneratedDocumentResponse(BaseModel):
+    id: str
+    filename: str
+    document_type: str
+    mime_type: Optional[str] = None
+    created_at: str
 
 class RequestListItem(BaseModel):
     id: str
@@ -101,6 +120,7 @@ class RequestListItem(BaseModel):
     status: str
     created_at: str
     admin_notes: Optional[str] = None
+    generated_documents: List[GeneratedDocumentResponse] = []
 
 class RequestListResponse(BaseModel):
     requests: List[RequestListItem]
@@ -111,6 +131,9 @@ class RequestDetailResponse(BaseModel):
     request: Dict[str, Any]
     admin_form_schema: Dict[str, Any]
 
+class RejectRequest(BaseModel):
+    rejection_reason: str
+
 # Form validation models
 class StudentFormData(BaseModel):
     nama: str = Field(..., min_length=2, max_length=100)
@@ -118,7 +141,7 @@ class StudentFormData(BaseModel):
     email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
     program_studi: Optional[str] = Field(None, max_length=100)
     template_id: str = Field(..., min_length=1)
-    keperluan: str = Field(..., min_length=10, max_length=500)
+    keperluan: str = Field(..., min_length=2, max_length=100)  # now string, not Enum
     form_data: Dict[str, Any]
 
     @validator('nim')
@@ -129,8 +152,9 @@ class StudentFormData(BaseModel):
 
     @validator('keperluan')
     def validate_keperluan(cls, v):
-        if len(v.strip()) < 10:
-            raise ValueError('Keperluan must be at least 10 characters')
+        # since it's template name, just basic validation
+        if not v.strip():
+            raise ValueError('Keperluan cannot be empty')
         return v.strip()
 
 class AdminFormData(BaseModel):

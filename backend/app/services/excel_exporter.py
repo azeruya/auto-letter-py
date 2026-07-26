@@ -1,3 +1,4 @@
+# backend/app/services/excel_exporter.py
 import os
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -95,7 +96,7 @@ class ExcelExporter:
                 "Program Studi": student.program_studi,
                 "Template": template.name,
                 "Kategori Template": template.category,
-                "Keperluan": req.purpose,
+                "Keperluan": req.keperluan,
                 "Catatan Admin": req.admin_notes or ""
             })
 
@@ -140,15 +141,15 @@ class ExcelExporter:
                 "Program Studi": student.program_studi,
                 "Template": template.name,
                 "Kategori Template": template.category,
-                "Keperluan": req.purpose,
+                "Keperluan": req.keperluan,
                 "Catatan Admin": req.admin_notes or ""
             }
 
-            student_data = req.student_form_data or {}
+            student_data = req.student_data or {}
             for k, v in student_data.items():
                 base_info[f"Data Mahasiswa - {k}"] = v
 
-            admin_data = req.admin_form_data or {}
+            admin_data = req.admin_data or {}
             for k, v in admin_data.items():
                 base_info[f"Data Admin - {k}"] = v
 

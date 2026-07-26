@@ -1,4 +1,3 @@
-# backend/app/services/template_parser.py
 from docx import Document
 import re
 from typing import List, Dict, Any
@@ -8,27 +7,25 @@ logger = logging.getLogger(__name__)
 
 class TemplateParser:
     def __init__(self):
-        self.placeholder_pattern = r'\{\{(\w+)\}\}'
+        # support camelCase, snake_case, row.table_field
+        self.placeholder_pattern = r'\{\{\s*([\w\.]+)\s*\}\}'
         
-        # Indonesian-specific field patterns for better categorization
         self.field_groups = {
-            "header": ["nomor", "number", "tanggal", "date", "lampiran", "attachment", "hal", "subject", "perihal"],
+            "header": ["nomor", "number", "tanggal", "date", "lampiran", "attachment", "hal", "subject", "perihal", "bidang"],
             "recipient": ["kepada", "recipient", "yth", "alamat", "address", "kota", "location", "tempat"],
-            "personal": ["nama", "name", "nim", "id", "program", "student", "mahasiswa", "prodi"],
-            "content": ["judul", "title", "kegiatan", "activity", "penelitian", "research", "lama", "duration", "waktu", "period", "lokasi", "isi"],
+            "personal": ["nama", "nim", "id", "program", "student", "mahasiswa", "prodi", "ttl"],
+            "parent": ["ortu", "orangtua", "ayah", "ibu", "wali"],
+            "content": ["judul", "title", "kegiatan", "activity", "penelitian", "research", "lama", "duration", "waktu", "period", "lokasi", "isi", "tanggal"],
             "signature": ["penandatangan", "signer", "nip", "jabatan", "position", "direktur", "kepala"],
             "other": []
         }
-    
+
     def parse_template(self, file_path: str) -> Dict[str, Any]:
-        """Parse a DOCX template and extract field information"""
         try:
             doc = Document(file_path)
             placeholders = self._extract_placeholders(doc)
             schema = self._generate_schema(placeholders)
 
-            logger.info(f"Template parsed successfully: {file_path} ({len(placeholders)} placeholders found)")
-            
             return {
                 "success": True,
                 "placeholders": placeholders,
@@ -44,25 +41,19 @@ class TemplateParser:
                 "schema": {"sections": []},
                 "field_count": 0
             }
-    
+
     def _extract_placeholders(self, doc: Document) -> List[str]:
-        """Extract all placeholder fields from the document"""
         placeholders = set()
         try:
-            # Extract from paragraphs
             for paragraph in doc.paragraphs:
                 matches = re.findall(self.placeholder_pattern, paragraph.text)
                 placeholders.update(matches)
-            
-            # Extract from tables
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
                         for paragraph in cell.paragraphs:
                             matches = re.findall(self.placeholder_pattern, paragraph.text)
                             placeholders.update(matches)
-            
-            # Extract from headers and footers
             for section in doc.sections:
                 for paragraph in section.header.paragraphs:
                     matches = re.findall(self.placeholder_pattern, paragraph.text)
@@ -72,78 +63,93 @@ class TemplateParser:
                     placeholders.update(matches)
         except Exception as e:
             logger.warning(f"Error extracting placeholders: {e}")
-        
         return sorted(list(placeholders))
-    
+
     def _humanize_field(self, field_name: str) -> str:
-        """Convert field name to human-readable format"""
-        # Handle common Indonesian abbreviations
         replacements = {
-            'nim': 'NIM',
-            'nip': 'NIP',
-            'nama': 'Nama',
-            'tanggal': 'Tanggal',
-            'nomor': 'Nomor',
-            'hal': 'Hal',
-            'prodi': 'Program Studi'
+            "nim": "NIM",
+            "nip": "NIP",
+            "ttl": "Tempat, Tanggal Lahir",
+            "prodi": "Program Studi",
+            "nama": "Nama",
+            "nomor": "Nomor",
+            "hal": "Hal",
+            "ortu": "Orang Tua",
+            "bidang": "Nomor"
         }
-        
-        # Check if it's a known Indonesian term
-        lower_name = field_name.lower()
+
+        base_name = field_name.split(".")[-1]
+        lower_name = base_name.lower()
+
         if lower_name in replacements:
             return replacements[lower_name]
-        
-        # Convert snake_case to Title Case
-        return field_name.replace('_', ' ').title()
-    
-    def _infer_field_type(self, field_name: str) -> str:
-        """Infer the appropriate input type for a field"""
-        lower_name = field_name.lower()
-        
-        if any(word in lower_name for word in ['tanggal', 'date']):
-            return 'date'
-        elif any(word in lower_name for word in ['email', 'surel']):
-            return 'email'
-        elif any(word in lower_name for word in ['nomor', 'number', 'nim', 'nip']):
-            return 'text'
-        elif any(word in lower_name for word in ['judul', 'title', 'kegiatan', 'activity', 'deskripsi', 'description']):
-            return 'textarea'
-        elif any(word in lower_name for word in ['telepon', 'phone', 'hp']):
-            return 'tel'
-        else:
-            return 'text'
-    
+
+        if "_" in base_name:
+            return base_name.replace("_", " ").title()
+        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', base_name)
+        return label.title()
+
     def _translate_section_name(self, section_name: str) -> str:
-        """Translate section names to Indonesian"""
         translations = {
             "header": "Kop Surat",
             "recipient": "Penerima",
-            "personal": "Data Pribadi",
+            "personal": "Data Mahasiswa",
+            "parent": "Data Orang Tua",
             "content": "Isi Surat",
             "signature": "Penandatangan",
+            "table": "Tabel Data",
             "other": "Lainnya"
         }
         return translations.get(section_name, section_name.title())
-    
-    def _generate_schema(self, placeholders: list) -> dict:
-        """
-        Generate a simple schema for the template based on placeholders.
-        """
-        schema = {"sections": []}
 
-        # Example: group fields by your predefined field_groups
-        sections = {}
+    def _infer_field_type(self, field_name: str) -> str:
+        name = field_name.lower()
+        
+        if name.startswith("row."):
+            return "text"
+
+        if any(k in name for k in ["tanggal", "date", "tgl", "ttl"]):
+            return "date"
+        if "email" in name:
+            return "email"
+        if any(k in name for k in ["nomor", "number", "nim", "nip", "id", "bidang"]):
+            return "number"
+        if any(k in name for k in ["alamat", "address", "isi", "keterangan", "description", "perihal"]):
+            return "textarea"
+        if any(k in name for k in ["nama", "title", "jabatan", "lokasi", "program", "prodi", "kegiatan", "penandatangan"]):
+            return "text"
+        
+        return "text"
+
+    def _generate_schema(self, placeholders: list) -> dict:
+        schema = {"sections": []}
+        sections: Dict[str, List[Dict[str, Any]]] = {}
+
         for field in placeholders:
+            field_info = {
+                "name": field,
+                "label": self._humanize_field(field),
+                "type": self._infer_field_type(field),
+                "repeatable": field.startswith("row.")
+            }
+
+            if field.startswith("row."):
+                sections.setdefault("table", []).append(field_info)
+                continue
+
             added = False
             for section_name, keywords in self.field_groups.items():
+                # khusus tanggal → bedakan
+                if "tanggal" in field.lower() and field.lower() != "tanggal":
+                    section_name = "content"
                 if any(k in field.lower() for k in keywords):
-                    sections.setdefault(section_name, []).append(field)
+                    sections.setdefault(section_name, []).append(field_info)
                     added = True
                     break
+
             if not added:
-                sections.setdefault("other", []).append(field)
-        
-        # Convert sections dict to list format
+                sections.setdefault("other", []).append(field_info)
+
         for section_name, fields in sections.items():
             schema["sections"].append({
                 "name": self._translate_section_name(section_name),

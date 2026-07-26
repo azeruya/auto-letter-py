@@ -1,5 +1,5 @@
 # backend/app/routers/auth.py
-from fastapi import APIRouter, HTTPException, Depends, status, Request
+from fastapi import APIRouter, HTTPException, Depends, status, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -40,48 +40,136 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=8)
     new_password: str = Field(..., min_length=8)
 
+class RefreshResponse(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+
 @router.post("/login", response_model=Token)
 async def login(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    """Authenticate an administrator and issue access/refresh tokens."""
+
     check_rate_limit(request, limit=5, window_minutes=1)
-    """Admin login endpoint"""
+
     try:
-        admin = authenticate_admin(db, form_data.username, form_data.password)
-        
+        admin = authenticate_admin(
+            db,
+            form_data.username,
+            form_data.password
+        )
+
         if not admin:
-            logger.warning(f"Failed login attempt for username: {form_data.username} from {request.client.host}")
+            logger.warning(
+                "Failed login attempt for username: "
+                f"{form_data.username} from {request.client.host}"
+            )
+
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect username or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
-        # Create access token
-        access_token_expires = timedelta(minutes=settings.jwt_expire_minutes)
+
         access_token = security_manager.create_access_token(
-            data={"sub": admin.username}, expires_delta=access_token_expires
+            data={"sub": admin.username}
         )
 
-        # Update last login
+        refresh_token = security_manager.create_refresh_token(
+            data={"sub": admin.username}
+        )
+
+        # HttpOnly prevents JavaScript from reading the refresh token.
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            secure=not settings.debug,
+            samesite="lax",
+            max_age=settings.jwt_refresh_expire_days * 24 * 60 * 60,
+            path="/api/auth",
+        )
+
         admin.last_login = datetime.utcnow()
         db.commit()
-        
+
         logger.info(f"Successful login for admin: {admin.username}")
-        
+
         return Token(
             access_token=access_token,
             token_type="bearer",
             expires_in=settings.jwt_expire_minutes * 60
         )
-        
+
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        raise HTTPException(500, "Login failed")
+
+    except Exception as exc:
+        logger.error(f"Login error: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="Login failed"
+        )
+    
+@router.post("/refresh", response_model=RefreshResponse)
+async def refresh_access_token(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Issue a new access token using the refresh-token cookie."""
+
+    refresh_token = request.cookies.get("refresh_token")
+
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is missing"
+        )
+
+    payload = security_manager.verify_token(
+        refresh_token,
+        expected_type="refresh"
+    )
+
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is invalid or expired"
+        )
+
+    username = payload.get("sub")
+
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+    admin = (
+        db.query(Admin)
+        .filter(Admin.username == username)
+        .first()
+    )
+
+    if not admin or not admin.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Administrator not found or inactive"
+        )
+
+    access_token = security_manager.create_access_token(
+        data={"sub": admin.username}
+    )
+
+    return RefreshResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in=settings.jwt_expire_minutes * 60
+    )
 
 @router.post("/register", response_model=AdminResponse)
 async def register_admin(
@@ -162,9 +250,15 @@ async def get_current_admin(current_admin: Admin = Depends(get_current_user)):
     )
 
 @router.post("/logout")
-async def logout(current_admin: Admin = Depends(get_current_user)):
-    """Logout (client should discard token)"""
-    logger.info(f"Admin logged out: {current_admin.username}")
+async def logout(response: Response):
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api/auth",
+        httponly=True,
+        secure=not settings.debug,
+        samesite="lax",
+    )
+
     return {"message": "Successfully logged out"}
     
 @router.post("/change-password")

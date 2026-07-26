@@ -18,7 +18,7 @@ class DriveUploader:
         
         try:
             if not os.path.exists(credentials_path):
-                print(f"Google credentials file not found: {credentials_path}")
+                logger.error(f"Google credentials file not found: {credentials_path}")
                 return
                 
             self.credentials = Credentials.from_service_account_file(

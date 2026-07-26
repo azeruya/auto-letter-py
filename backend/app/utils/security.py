@@ -25,39 +25,100 @@ class SecurityManager:
         self.secret_key = settings.secret_key
         self.algorithm = settings.jwt_algorithm
         self.access_token_expire_minutes = settings.jwt_expire_minutes
-    
+        self.refresh_token_expire_days = settings.jwt_refresh_expire_days
+
     def get_password_hash(self, password: str) -> str:
-        """Hash a password using bcrypt"""
         salt = bcrypt.gensalt()
         hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
         return hashed.decode("utf-8")
-    
-    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        """Verify a password against its hash using bcrypt"""
+
+    def verify_password(
+        self,
+        plain_password: str,
+        hashed_password: str
+    ) -> bool:
         return bcrypt.checkpw(
-            plain_password.encode("utf-8"), 
+            plain_password.encode("utf-8"),
             hashed_password.encode("utf-8")
         )
-    
-    def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None):
-        """Create a JWT access token"""
+
+    def create_access_token(
+        self,
+        data: dict,
+        expires_delta: Optional[timedelta] = None
+    ) -> str:
+        """Create a short-lived access token."""
         to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.utcnow() + expires_delta
-        else:
-            expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
-        
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-        return encoded_jwt
-    
-    def verify_token(self, token: str) -> Optional[dict]:
-        """Verify and decode a JWT token"""
+
+        expire = datetime.utcnow() + (
+            expires_delta
+            if expires_delta
+            else timedelta(minutes=self.access_token_expire_minutes)
+        )
+
+        to_encode.update({
+            "exp": expire,
+            "type": "access",
+        })
+
+        return jwt.encode(
+            to_encode,
+            self.secret_key,
+            algorithm=self.algorithm
+        )
+
+    def create_refresh_token(
+        self,
+        data: dict,
+        expires_delta: Optional[timedelta] = None
+    ) -> str:
+        """Create a longer-lived refresh token."""
+        to_encode = data.copy()
+
+        expire = datetime.utcnow() + (
+            expires_delta
+            if expires_delta
+            else timedelta(days=self.refresh_token_expire_days)
+        )
+
+        to_encode.update({
+            "exp": expire,
+            "type": "refresh",
+        })
+
+        return jwt.encode(
+            to_encode,
+            self.secret_key,
+            algorithm=self.algorithm
+        )
+
+    def verify_token(
+        self,
+        token: str,
+        expected_type: Optional[str] = None
+    ) -> Optional[dict]:
+        """Decode a token and optionally enforce its type."""
         try:
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            payload = jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=[self.algorithm]
+            )
+
+            if expected_type:
+                token_type = payload.get("type")
+
+                if token_type != expected_type:
+                    logger.warning(
+                        "Unexpected token type. "
+                        f"Expected {expected_type}, received {token_type}"
+                    )
+                    return None
+
             return payload
-        except JWTError as e:
-            logger.warning(f"Token verification failed: {e}")
+
+        except JWTError as exc:
+            logger.warning(f"Token verification failed: {exc}")
             return None
 
 security_manager = SecurityManager()
@@ -96,7 +157,11 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = security_manager.verify_token(credentials.credentials)
+    payload = security_manager.verify_token(
+        credentials.credentials,
+        expected_type="access"
+    )
+    
     if payload is None:
         if optional:
             return None

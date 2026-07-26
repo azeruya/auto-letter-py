@@ -1,10 +1,8 @@
 # backend/app/models/admin.py
 from sqlalchemy import Column, String, DateTime, Boolean
-from sqlalchemy.orm import relationship
 from ..database import Base
 from datetime import datetime
 import uuid
-import bcrypt
 
 class Admin(Base):
     __tablename__ = "admins"
@@ -19,10 +17,11 @@ class Admin(Base):
     last_login = Column(DateTime)
     
     def set_password(self, password: str):
-        """Hash and set password using bcrypt"""
-        hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
-        self.password_hash = hashed.decode("utf-8")  # store as string
-    
+        """Hash and set the admin's password"""
+        from ..utils.security import security_manager
+        self.password_hash = security_manager.get_password_hash(password)
+
     def check_password(self, password: str) -> bool:
-        """Verify password using bcrypt"""
-        return bcrypt.checkpw(password.encode("utf-8"), self.password_hash.encode("utf-8"))
+        """Verify the admin's password"""
+        from ..utils.security import security_manager
+        return security_manager.verify_password(password, self.password_hash)
