@@ -11,6 +11,24 @@ import LoadingSpinner from "../components/LoadingSpinner";
 // src/utils/formatLabel.ts and importing everywhere instead.
 const KNOWN_ACRONYMS = new Set(['nim', 'nip', 'nik', 'ktp', 'kk', 'sks', 'ipk']);
 
+type SchemaField = {
+  name: string;
+  label: string;
+  type?: string;
+  required?: boolean;
+  repeatable?: boolean;
+  order?: number;
+  width?: 'half' | 'full';
+};
+
+type SchemaSection = {
+  id?: string;
+  name: string;
+  description?: string;
+  order?: number;
+  fields: SchemaField[];
+};
+
 function formatLabel(raw: string): string {
   return raw
     .replace(/_/g, ' ')
@@ -31,7 +49,7 @@ const ProcessRequest = () => {
 
   const [loading, setLoading] = useState(true);
   const [requestData, setRequestData] = useState<any>(null);
-  const [adminSchema, setAdminSchema] = useState<any[]>([]);
+  const [formSchema, setFormSchema] = useState<SchemaSection[]>([]);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -40,7 +58,11 @@ const ProcessRequest = () => {
       try {
         const data = await ApiService.getRequestDetails(id);
         setRequestData(data.request);
-        setAdminSchema(data.admin_form_schema?.fields || []);
+        setFormSchema(
+          data.form_schema?.sections ||
+          data.request.template.schema?.sections ||
+          []
+        );
 
         // Prefill student, admin, and notes
         form.setFieldsValue({
@@ -104,6 +126,145 @@ const ProcessRequest = () => {
   const { template } = requestData;
   const { student_fields, admin_fields, auto_fields } = template.field_assignments;
 
+  const sortSections = (sections: SchemaSection[]) =>
+    [...sections]
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .map((section) => ({
+        ...section,
+        fields: [...section.fields].sort(
+          (a, b) => (a.order ?? 0) - (b.order ?? 0)
+        ),
+      }));
+
+  const filterSectionsByFields = (
+    sections: SchemaSection[],
+    allowedFields: string[]
+  ) => {
+    const allowed = new Set(allowedFields);
+
+    return sortSections(sections)
+      .map((section) => ({
+        ...section,
+        fields: section.fields.filter((field) =>
+          allowed.has(field.name)
+        ),
+      }))
+      .filter((section) => section.fields.length > 0);
+  };
+
+  const studentSections = filterSectionsByFields(
+    formSchema,
+    student_fields
+  );
+
+  const adminSections = filterSectionsByFields(
+    formSchema,
+    admin_fields
+  );
+
+  const autoSections = filterSectionsByFields(
+    formSchema,
+    auto_fields
+  );
+
+  const renderFieldInput = (
+    field: SchemaField,
+    disabled: boolean
+  ) => {
+    const commonProps = {
+      disabled,
+      className: disabled
+        ? 'form-input bg-slate-50 text-slate-500'
+        : 'form-input',
+    };
+
+    if (field.type === 'textarea') {
+      return (
+        <textarea
+          rows={4}
+          {...commonProps}
+        />
+      );
+    }
+
+    if (field.type === 'date') {
+      return <input type="date" {...commonProps} />;
+    }
+
+    if (field.type === 'number') {
+      return <input type="number" {...commonProps} />;
+    }
+
+    if (field.type === 'email') {
+      return <input type="email" {...commonProps} />;
+    }
+
+    return <input type="text" {...commonProps} />;
+  };
+
+  const renderCategorySections = (
+    sections: SchemaSection[],
+    options: {
+      disabled: boolean;
+      showRequiredRules?: boolean;
+    }
+  ) => {
+    return sections.map((section, sectionIndex) => (
+      <div
+        key={section.id || `${section.name}-${sectionIndex}`}
+        className="border-b border-slate-100 pb-5 last:border-b-0 last:pb-0"
+      >
+        <div className="mb-4">
+          <h4 className="text-sm font-semibold text-slate-800">
+            {section.name}
+          </h4>
+
+          {section.description && (
+            <p className="mt-1 text-[13px] text-slate-500">
+              {section.description}
+            </p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
+          {section.fields.map((field) => {
+            const fullWidth =
+              field.repeatable || field.width === 'full';
+
+            return (
+              <Form.Item
+                key={field.name}
+                label={
+                  <span className="form-label mb-0">
+                    {formatLabel(field.label || field.name)}
+                  </span>
+                }
+                name={field.name}
+                className={`mb-0 ${
+                  fullWidth ? 'sm:col-span-2' : ''
+                }`}
+                rules={
+                  options.showRequiredRules && field.required
+                    ? [
+                        {
+                          required: true,
+                          message: `${formatLabel(
+                            field.label || field.name
+                          )} wajib diisi`,
+                        },
+                      ]
+                    : []
+                }
+              >
+                {renderFieldInput(field, options.disabled)}
+              </Form.Item>
+            );
+          })}
+        </div>
+      </div>
+    ));
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -127,103 +288,53 @@ const ProcessRequest = () => {
       >
         {/* Student fields — read-only, filled in by the student */}
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-2">
+          <div className="mb-5 flex items-center gap-2">
             <h3 className="text-base font-semibold text-slate-900">
               Data Mahasiswa
             </h3>
+
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
               Hanya baca
             </span>
           </div>
 
-          <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-            {student_fields.map((field: string) => (
-              <Form.Item
-                key={field}
-                label={
-                  <span className="form-label mb-0">{formatLabel(field)}</span>
-                }
-                name={field}
-                className="mb-0"
-              >
-                <input disabled className="form-input bg-slate-50 text-slate-500" />
-              </Form.Item>
-            ))}
+          <div className="space-y-5">
+            {renderCategorySections(studentSections, {
+              disabled: true,
+            })}
           </div>
         </section>
 
         {/* Admin fields — editable */}
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-4 text-base font-semibold text-slate-900">
+          <h3 className="mb-5 text-base font-semibold text-slate-900">
             Data Admin
           </h3>
 
-          <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-            {admin_fields.map((field: string) => (
-              <Form.Item
-                key={field}
-                label={
-                  <span className="form-label mb-0">{formatLabel(field)}</span>
-                }
-                name={field}
-                className="mb-0"
-              >
-                <input className="form-input" />
-              </Form.Item>
-            ))}
-
-            {/* Fallback: admin_schema from backend */}
-            {adminSchema.map((field: any) => (
-              <Form.Item
-                key={field.name}
-                label={
-                  <span className="form-label mb-0">
-                    {formatLabel(field.label || field.name)}
-                  </span>
-                }
-                name={field.name}
-                className="mb-0"
-                rules={
-                  field.required
-                    ? [
-                        {
-                          required: true,
-                          message: `${formatLabel(field.label || field.name)} wajib diisi`,
-                        },
-                      ]
-                    : []
-                }
-              >
-                <input className="form-input" />
-              </Form.Item>
-            ))}
+          <div className="space-y-5">
+            {renderCategorySections(adminSections, {
+              disabled: false,
+              showRequiredRules: true,
+            })}
           </div>
         </section>
 
         {/* Auto fields — prefilled & locked */}
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-2">
+          <div className="mb-5 flex items-center gap-2">
             <h3 className="text-base font-semibold text-slate-900">
               Data Otomatis
             </h3>
+
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
               Terisi otomatis
             </span>
           </div>
 
-          <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-            {auto_fields.map((field: string) => (
-              <Form.Item
-                key={field}
-                label={
-                  <span className="form-label mb-0">{formatLabel(field)}</span>
-                }
-                name={field}
-                className="mb-0"
-              >
-                <input disabled className="form-input bg-slate-50 text-slate-500" />
-              </Form.Item>
-            ))}
+          <div className="space-y-5">
+            {renderCategorySections(autoSections, {
+              disabled: true,
+            })}
           </div>
         </section>
 
