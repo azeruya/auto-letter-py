@@ -19,6 +19,7 @@ type SchemaField = {
   repeatable?: boolean;
   order?: number;
   width?: 'half' | 'full';
+  options?: string[];
 };
 
 type SchemaSection = {
@@ -43,6 +44,43 @@ function formatLabel(raw: string): string {
     .join(' ');
 }
 
+
+function getSubmittedValue(
+  data: Record<string, any> | null | undefined,
+  fieldName: string
+): any {
+  if (!data) return undefined;
+
+  // New format: literal key "row.nim"
+  if (Object.prototype.hasOwnProperty.call(data, fieldName)) {
+    return data[fieldName];
+  }
+
+  // Old format: { row: { nim: [...] } }
+  return fieldName.split('.').reduce<any>(
+    (current, key) => current?.[key],
+    data
+  );
+}
+
+function formatSubmittedValues(value: any): string[] {
+  if (value == null) return [];
+
+  if (Array.isArray(value)) {
+    return value.flatMap(formatSubmittedValues);
+  }
+
+  if (typeof value === 'object') {
+    if ('value' in value) {
+      return formatSubmittedValues(value.value);
+    }
+    return [];
+  }
+
+  const text = String(value).trim();
+  return text ? [text] : [];
+}
+
 const ProcessRequest = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -51,54 +89,104 @@ const ProcessRequest = () => {
   const [requestData, setRequestData] = useState<any>(null);
   const [formSchema, setFormSchema] = useState<SchemaSection[]>([]);
   const [form] = Form.useForm();
+  const [processing, setProcessing] = useState(false);
 
   useEffect(() => {
     if (!id) return;
+
     const fetchDetails = async () => {
       try {
+        setLoading(true);
+
         const data = await ApiService.getRequestDetails(id);
+
         setRequestData(data.request);
+
         setFormSchema(
-          data.form_schema?.sections ||
-          data.request.template.schema?.sections ||
+          data.request?.template?.schema?.sections ??
+          data.form_schema?.sections ??
           []
         );
 
-        // Prefill student, admin, and notes
+        const autoFields =
+          data.request?.template?.field_assignments?.auto_fields ?? [];
+
+        const autoValues =
+          data.auto_values ??
+          data.request.auto_data ??
+          {};
+
         form.setFieldsValue({
           ...data.request.student_data,
           ...data.request.admin_data,
-          admin_notes: data.request.admin_notes || "",
-          // Prefill auto fields if any
-          ...Object.fromEntries(
-            (data.request.template.field_assignments.auto_fields || []).map(
-              (field: string) => [field, new Date().toISOString().split("T")[0]]
-            )
-          ),
+          ...autoValues,
+          admin_notes: data.request.admin_notes || '',
+        });
+
+        const buildAutoDefaults = (fields: string[]) =>
+          Object.fromEntries(
+            fields.map((field) => {
+              const normalized = field.toLowerCase();
+
+              if (
+                normalized.includes('tanggal') ||
+                normalized.includes('date')
+              ) {
+                return [
+                  field,
+                  new Date().toISOString().split('T')[0],
+                ];
+              }
+
+              return [field, ''];
+            })
+          );
+        form.setFieldsValue({
+          ...data.request.student_data,
+          ...data.request.admin_data,
+          ...buildAutoDefaults(autoFields),
+          admin_notes: data.request.admin_notes || '',
         });
       } catch (err: any) {
-        toast.error(err.response?.data?.detail || "Gagal memuat detail permohonan");
+        toast.error(
+          err?.detail ||
+            err?.message ||
+            'Gagal memuat detail permohonan'
+        );
       } finally {
         setLoading(false);
       }
     };
+
     fetchDetails();
   }, [id, form]);
 
   const handleProcess = async (values: any) => {
     try {
-      const payload = {
-        form_data: values,
-        admin_notes: values.admin_notes || "",
-      };
+      setProcessing(true);
 
-      await ApiService.processRequest(id!, payload);
+      const adminFormData = Object.fromEntries(
+        adminFields.map((field) => [
+          field,
+          values[field],
+        ])
+      );
 
-      toast.success("Permohonan berhasil diproses");
-      navigate("/dashboard/requests");
+      await ApiService.processRequest(id!, {
+        form_data: adminFormData,
+        admin_notes: values.admin_notes || '',
+      });
+
+      toast.success('Permohonan berhasil diproses');
+      navigate('/dashboard/requests');
     } catch (err: any) {
-      console.error(err);
-      toast.error(err.response?.data?.detail?.message || "Gagal memproses permohonan");
+      toast.error(
+        err?.detail ||
+          err?.message ||
+          'Gagal memproses permohonan'
+      );
+    } finally {
+      setProcessing(false);
     }
   };
 
@@ -124,7 +212,16 @@ const ProcessRequest = () => {
   }
 
   const { template } = requestData;
-  const { student_fields, admin_fields, auto_fields } = template.field_assignments;
+  const assignments = template.field_assignments ?? {};
+
+  const studentFields: string[] =
+    assignments.student_fields ?? [];
+
+  const adminFields: string[] =
+    assignments.admin_fields ?? [];
+
+  const autoFields: string[] =
+    assignments.auto_fields ?? [];
 
   const sortSections = (sections: SchemaSection[]) =>
     [...sections]
@@ -154,52 +251,93 @@ const ProcessRequest = () => {
 
   const studentSections = filterSectionsByFields(
     formSchema,
-    student_fields
+    studentFields
   );
 
   const adminSections = filterSectionsByFields(
     formSchema,
-    admin_fields
+    adminFields
   );
 
   const autoSections = filterSectionsByFields(
     formSchema,
-    auto_fields
+    autoFields
   );
 
   const renderFieldInput = (
     field: SchemaField,
     disabled: boolean
   ) => {
-    const commonProps = {
-      disabled,
-      className: disabled
-        ? 'form-input bg-slate-50 text-slate-500'
-        : 'form-input',
-    };
+    const inputClassName = disabled
+      ? 'form-input bg-slate-50 text-slate-500'
+      : 'form-input';
 
-    if (field.type === 'textarea') {
-      return (
-        <textarea
-          rows={4}
-          {...commonProps}
-        />
-      );
+    const selectClassName = disabled
+      ? 'form-select bg-slate-50 text-slate-500'
+      : 'form-select';
+
+    switch (field.type) {
+      case 'select':
+        return (
+          <select
+            disabled={disabled}
+            className={selectClassName}
+          >
+            <option value="">Pilih salah satu</option>
+
+            {(field.options ?? []).map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        );
+
+      case 'textarea':
+        return (
+          <textarea
+            rows={4}
+            disabled={disabled}
+            className={`${inputClassName} min-h-[108px] resize-y py-3`}
+          />
+        );
+
+      case 'date':
+        return (
+          <input
+            type="date"
+            disabled={disabled}
+            className={inputClassName}
+          />
+        );
+
+      case 'number':
+        return (
+          <input
+            type="number"
+            disabled={disabled}
+            className={inputClassName}
+          />
+        );
+
+      case 'email':
+        return (
+          <input
+            type="email"
+            disabled={disabled}
+            className={inputClassName}
+          />
+        );
+
+      default:
+        return (
+          <input
+            type="text"
+            disabled={disabled}
+            className={inputClassName}
+          />
+        );
     }
-
-    if (field.type === 'date') {
-      return <input type="date" {...commonProps} />;
-    }
-
-    if (field.type === 'number') {
-      return <input type="number" {...commonProps} />;
-    }
-
-    if (field.type === 'email') {
-      return <input type="email" {...commonProps} />;
-    }
-
-    return <input type="text" {...commonProps} />;
   };
 
   const renderCategorySections = (
@@ -227,9 +365,54 @@ const ProcessRequest = () => {
         </div>
 
         <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
+          
           {section.fields.map((field) => {
             const fullWidth =
               field.repeatable || field.width === 'full';
+
+            const isStudentField =
+              options.disabled &&
+              studentFields.includes(field.name);
+
+            if (isStudentField && field.repeatable) {
+              const rawValue = getSubmittedValue(
+                requestData.student_data,
+                field.name
+              );
+
+              const values = formatSubmittedValues(rawValue);
+
+              return (
+                <div
+                  key={field.name}
+                  className={fullWidth ? 'sm:col-span-2' : ''}
+                >
+                  <label className="form-label">
+                    {formatLabel(field.label || field.name)}
+                  </label>
+
+                  <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    {values.length > 0 ? (
+                      values.map((value, index) => (
+                        <div
+                          key={index}
+                          className="flex gap-3 text-sm text-slate-700"
+                        >
+                          <span className="shrink-0 text-slate-400">
+                            {index + 1}.
+                          </span>
+                          <span className="break-words">{value}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-400">
+                        Belum diisi
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            }
 
             return (
               <Form.Item
@@ -260,6 +443,7 @@ const ProcessRequest = () => {
               </Form.Item>
             );
           })}
+
         </div>
       </div>
     ));
@@ -287,56 +471,62 @@ const ProcessRequest = () => {
         className="space-y-5"
       >
         {/* Student fields — read-only, filled in by the student */}
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex items-center gap-2">
-            <h3 className="text-base font-semibold text-slate-900">
-              Data Mahasiswa
-            </h3>
+        {studentSections.length > 0 && (
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex items-center gap-2">
+              <h3 className="text-base font-semibold text-slate-900">
+                Data Mahasiswa
+              </h3>
 
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
-              Hanya baca
-            </span>
-          </div>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                Hanya baca
+              </span>
+            </div>
 
-          <div className="space-y-5">
-            {renderCategorySections(studentSections, {
-              disabled: true,
-            })}
-          </div>
-        </section>
+            <div className="space-y-5">
+              {renderCategorySections(studentSections, {
+                disabled: true,
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Admin fields — editable */}
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-5 text-base font-semibold text-slate-900">
-            Data Admin
-          </h3>
-
-          <div className="space-y-5">
-            {renderCategorySections(adminSections, {
-              disabled: false,
-              showRequiredRules: true,
-            })}
-          </div>
-        </section>
-
-        {/* Auto fields — prefilled & locked */}
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex items-center gap-2">
-            <h3 className="text-base font-semibold text-slate-900">
-              Data Otomatis
+        {adminSections.length > 0 && (
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="mb-5 text-base font-semibold text-slate-900">
+              Data Admin
             </h3>
 
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
-              Terisi otomatis
-            </span>
-          </div>
+            <div className="space-y-5">
+              {renderCategorySections(adminSections, {
+                disabled: false,
+                showRequiredRules: true,
+              })}
+            </div>
+          </section>
+        )}
 
-          <div className="space-y-5">
-            {renderCategorySections(autoSections, {
-              disabled: true,
-            })}
-          </div>
-        </section>
+        {/* Auto fields — prefilled & locked */}
+        {autoSections.length > 0 && (
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-5 flex items-center gap-2">
+              <h3 className="text-base font-semibold text-slate-900">
+                Data Otomatis
+              </h3>
+
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                Terisi otomatis
+              </span>
+            </div>
+
+            <div className="space-y-5">
+              {renderCategorySections(autoSections, {
+                disabled: true,
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Admin notes */}
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -358,8 +548,19 @@ const ProcessRequest = () => {
             Batal
           </button>
 
-          <button type="submit" className="btn-primary h-10 px-5">
-            Proses Permohonan
+          <button
+            type="submit"
+            disabled={processing}
+            className="btn-primary h-10 min-w-[170px] px-5"
+          >
+            {processing ? (
+              <LoadingSpinner
+                size="sm"
+                text="Memproses..."
+              />
+            ) : (
+              'Proses Permohonan'
+            )}
           </button>
         </div>
       </Form>

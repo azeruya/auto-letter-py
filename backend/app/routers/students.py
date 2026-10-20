@@ -212,30 +212,81 @@ async def get_student_form_schema(
 
     student_sections = []
 
-    for section in schema.get("sections", []):
-        visible_fields = [
-            field
-            for field in section.get("fields", [])
-            if field.get("name") in student_fields
-        ]
+    for section_index, section in enumerate(schema.get("sections", [])):
+        if not isinstance(section, dict):
+            continue
+
+        raw_fields = section.get("fields", [])
+        visible_fields = []
+
+        for field_index, field in enumerate(raw_fields):
+
+            # Old schema
+            if isinstance(field, str):
+                field_name = field
+
+                normalized_field = {
+                    "name": field_name,
+                    "label": field_name.replace("_", " ").title(),
+                    "type": "text",
+                    "required": True,
+                    "repeatable": field_name.startswith("row."),
+                    "order": field_index,
+                    "width": "half",
+                }
+
+            # New schema
+            elif isinstance(field, dict):
+                field_name = field.get("name")
+
+                if not field_name:
+                    continue
+
+                normalized_field = {
+                    **field,
+                    "name": field_name,
+                    "label": field.get("label")
+                    or field_name.replace("_", " ").title(),
+                    "type": field.get("type", "text"),
+                    "required": field.get("required", True),
+                    "repeatable": field.get(
+                        "repeatable",
+                        field_name.startswith("row."),
+                    ),
+                    "order": field.get("order", field_index),
+                    "width": field.get("width", "half"),
+                }
+
+            else:
+                continue
+
+            if field_name in student_fields:
+                visible_fields.append(normalized_field)
 
         if not visible_fields:
             continue
 
         student_sections.append(
-            {
-                # Preserve section layout metadata.
-                "id": section.get("id"),
-                "name": section.get("name", "Bagian"),
-                "description": section.get(
-                    "description", ""
-                ),
-                "order": section.get("order", 0),
-
-                # Preserve field layout metadata.
-                "fields": visible_fields,
-            }
-        )
+        {
+            "id": section.get(
+                "id",
+                f"section-{section_index}",
+            ),
+            "name": section.get(
+                "name",
+                f"Bagian {section_index + 1}",
+            ),
+            "description": section.get(
+                "description",
+                "",
+            ),
+            "order": section.get(
+                "order",
+                section_index,
+            ),
+            "fields": visible_fields,
+        }
+    )
 
     return {
         "template": {

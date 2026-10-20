@@ -110,20 +110,6 @@ const AdminManagement: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div>
-        <p className="text-sm font-medium text-slate-500">
-          Pengaturan akses
-        </p>
-
-        <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-          Administrator
-        </h2>
-
-        <p className="mt-1.5 text-sm text-slate-500">
-          Kelola akun administrator yang dapat mengakses sistem.
-        </p>
-      </div>
 
       {/* Summary */}
       <div className="grid gap-4 sm:grid-cols-2">

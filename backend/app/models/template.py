@@ -1,4 +1,4 @@
-# backend/app/models/template.py (Updated)
+# backend/app/models/template.py 
 from sqlalchemy import Column, String, DateTime, Text, Boolean, JSON, Integer
 from sqlalchemy.orm import relationship
 from ..database import Base

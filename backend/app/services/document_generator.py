@@ -8,13 +8,15 @@ import subprocess
 import platform
 from datetime import datetime 
 import logging
+from copy import deepcopy
+from docx.table import _Row
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 class DocumentGenerator:
     def __init__(self):
-        self.placeholder_pattern = r'\{\{(\w+)\}\}'
+        self.placeholder_pattern = r'\{\{\s*([\w.]+)\s*\}\}'
         
         # Check PDF conversion capability
         self.pdf_available = self._check_pdf_conversion()
@@ -230,13 +232,151 @@ class DocumentGenerator:
                 else:
                     run.text = ""
     
-    def _process_tables(self, tables, user_data: Dict[str, Any]) -> int:
-        """Process tables and replace placeholders"""
+    def _get_repeatable_values(self, data, field_name):
+        """Support flat and nested repeatable-field submissions."""
+
+        # New format: {"row.nim": [...]}
+        if field_name in data:
+            raw = data[field_name]
+        else:
+            # Old format: {"row": {"nim": [...]}}
+            raw = data
+            for part in field_name.split("."):
+                if not isinstance(raw, dict):
+                    return []
+                raw = raw.get(part)
+                if raw is None:
+                    return []
+
+        if not isinstance(raw, list):
+            raw = [raw]
+
+        values = []
+        for item in raw:
+            if isinstance(item, dict):
+                item = item.get("value", "")
+
+            values.append(
+                "" if item is None else str(item)
+            )
+
+        return values
+
+    
+    def _process_tables(self, tables, user_data):
+        """Expand repeatable template rows and replace placeholders."""
         replacements = 0
+
         for table in tables:
+            # Snapshot original rows before modifying the table.
+            for template_row in list(table.rows):
+
+                row_text = " ".join(
+                    cell.text for cell in template_row.cells
+                )
+
+                fields = list(dict.fromkeys(
+                    name
+                    for name in re.findall(
+                        self.placeholder_pattern,
+                        row_text
+                    )
+                    if name.startswith("row.")
+                    and name != "row.no"
+                ))
+
+                if not fields:
+                    continue
+
+                field_values = {
+                    name: self._get_repeatable_values(
+                        user_data, name
+                    )
+                    for name in fields
+                }
+
+                lengths = {
+                    len(values)
+                    for values in field_values.values()
+                }
+
+                if len(lengths) != 1:
+                    raise ValueError(
+                        "Repeatable fields have different "
+                        f"row counts: {fields}"
+                    )
+
+                row_count = lengths.pop()
+
+                if row_count == 0:
+                    raise ValueError(
+                        "No repeatable values supplied "
+                        f"for fields: {fields}"
+                    )
+
+                # Insert copies immediately after the
+                # original template row.
+                anchor = template_row._tr
+
+                for index in range(row_count):
+                    new_tr = deepcopy(template_row._tr)
+                    anchor.addnext(new_tr)
+                    anchor = new_tr
+
+                    new_row = _Row(new_tr, table)
+
+                    row_data = dict(user_data)
+
+                    for name in fields:
+                        row_data[name] = (
+                            field_values[name][index]
+                        )
+
+                    row_data["row.no"] = str(index + 1)
+
+                    # Replace placeholders within this row.
+                    for cell in new_row.cells:
+                        replacements += self._process_paragraphs(
+                            cell.paragraphs,
+                            row_data
+                        )
+
+                    # Number first column if template uses
+                    # literal numbering, e.g. "1."
+                    first_cell = new_row.cells[0]
+
+                    if re.fullmatch(
+                        r"\s*\d+\.?\s*",
+                        first_cell.text
+                    ):
+                        para = first_cell.paragraphs[0]
+                        self._replace_text_across_runs(
+                            para,
+                            0,
+                            len(para.text),
+                            f"{index + 1}."
+                        )
+
+                # Remove the original placeholder row.
+                parent = template_row._tr.getparent()
+                parent.remove(template_row._tr)
+
+            # Process ordinary placeholders, including
+            # those in non-repeatable table rows.
             for row in table.rows:
                 for cell in row.cells:
-                    replacements += self._process_paragraphs(cell.paragraphs, user_data)
+                    replacements += self._process_paragraphs(
+                        cell.paragraphs,
+                        user_data
+                    )
+
+                    # Handle nested tables, if present.
+                    if cell.tables:
+                        replacements += self._process_tables(
+                            cell.tables,
+                            user_data
+                        )
+
         return replacements
     
     def _process_headers_footers(self, sections, user_data: Dict[str, Any]) -> int:

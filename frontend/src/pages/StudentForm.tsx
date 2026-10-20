@@ -56,8 +56,12 @@ const StudentForm: React.FC = () => {
   return (
     // Same background token as the rest of the app (Layout.tsx uses
     // the same #F8FAFC), not a generic Tailwind gray-50.
-    <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC] px-4">
-      <div className="w-full max-w-md bg-white shadow-sm rounded-xl border border-slate-200 p-8">
+    <div className="relative flex min-h-screen items-center justify-center bg-cover bg-center px-4 py-6"
+      style={{ backgroundImage: "url('/unp_2.JPG')" }}>
+
+      <div className="absolute inset-0 bg-slate-950/55" />
+
+      <div className="relative z-10 w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
         {/* Logo */}
         <div className="flex justify-center mb-4">
           <img src="/logo.png" alt="University Logo" className="h-16" />

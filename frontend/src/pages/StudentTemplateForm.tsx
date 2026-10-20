@@ -115,10 +115,6 @@ function RepeatableField({ field }: { field: FormField }) {
     <div>
       <label className="form-label">
         {formatLabel(field.label || field.name)}
-
-        {field.required && (
-          <span className="ml-0.5 text-rose-600">*</span>
-        )}
       </label>
 
       <div className="space-y-2.5">
@@ -259,10 +255,6 @@ function StandardField({ field }: { field: FormField }) {
     <div>
       <label className="form-label">
         {formatLabel(field.label || field.name)}
-
-        {field.required && (
-          <span className="ml-0.5 text-rose-600">*</span>
-        )}
       </label>
 
       {renderField()}
@@ -274,6 +266,29 @@ function StandardField({ field }: { field: FormField }) {
       )}
     </div>
   );
+}
+
+function normalizeFormData(
+  formFields: Record<string, any>,
+  sections: Section[]
+): Record<string, any> {
+  const normalized: Record<string, any> = {};
+
+  for (const section of sections) {
+    for (const field of section.fields) {
+      // React Hook Form treats dots as nested paths
+      const value = field.name.split('.').reduce<any>(
+        (current, part) => current?.[part],
+        formFields
+      );
+
+      if (value !== undefined) {
+        normalized[field.name] = value;
+      }
+    }
+  }
+
+  return normalized;
 }
 
 function StudentTemplateForm() {
@@ -380,7 +395,7 @@ function StudentTemplateForm() {
       const payload: StudentFormData = {
         ...parsedStudentData,
         template_id: templateId,
-        form_data: formFields,
+        form_data: normalizeFormData(formFields, orderedSections),
       };
 
       await ApiService.submitStudentRequest(payload);
@@ -392,11 +407,19 @@ function StudentTemplateForm() {
     } catch (error: any) {
       console.error('Failed to submit request:', error);
 
-      toast.error(
-        error?.detail ||
-          error?.message ||
-          'Gagal mengirim pengajuan surat.'
-      );
+      const detail =
+        error?.response?.data?.detail ?? error?.detail;
+
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : typeof detail?.message === 'string'
+            ? detail.message
+            : typeof error?.message === 'string'
+              ? error.message
+              : 'Gagal mengirim pengajuan surat.';
+
+      toast.error(message);
     }
   };
 

@@ -99,6 +99,36 @@ const getAvatarStyle = (name: string) => {
   return avatarPalette[index % avatarPalette.length];
 };
 
+
+function flattenDisplayData(
+  data: Record<string, any>,
+  prefix = ''
+): Array<[string, string]> {
+  return Object.entries(data ?? {}).flatMap(([key, value]) => {
+    const name = prefix ? `${prefix}.${key}` : key;
+
+    if (Array.isArray(value)) {
+      const text = value
+        .map((item) =>
+          item && typeof item === 'object' && 'value' in item
+            ? String(item.value ?? '')
+            : String(item ?? '')
+        )
+        .filter((item) => item.trim() !== '')
+        .join(', ');
+
+      return [[name, text || '—']];
+    }
+
+    if (value && typeof value === 'object') {
+      return flattenDisplayData(value, name);
+    }
+
+    return [[name, String(value ?? '—')]];
+  });
+}
+
+
 const Requests = () => {
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [adminFormSchema, setAdminFormSchema] = useState<any>(null);
@@ -568,12 +598,12 @@ const Requests = () => {
                       Data Mahasiswa
                     </h4>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-                      {Object.entries(selectedRequest.student_data).map(
+                      {flattenDisplayData(selectedRequest.student_data).map(
                         ([key, value]) => (
                           <Field
                             key={key}
-                            label={formatLabel(key)}
-                            value={String(value)}
+                            label={formatLabel(key.replace(/^row\./, ''))}
+                            value={value}
                           />
                         )
                       )}

@@ -355,30 +355,78 @@ class FieldAssignmentService:
 
         return merged_data
     
-    def validate_required_fields(self, template: Template, data: Dict[str, Any], 
-        field_type: str = "all") -> Dict[str, Any]:
-        """Validate that all required fields are present"""
+    
+    def validate_required_fields(
+        self,
+        template: Template,
+        data: Dict[str, Any],
+        field_type: str = "all"
+    ) -> Dict[str, Any]:
+        """Validate required fields, including nested and repeatable inputs."""
+
         if not template.field_assignments or not template.schema:
-            return {"valid": True, "missing_fields": []}
-        
-        # Get required fields based on type
+            return {
+                "valid": True,
+                "missing_fields": [],
+                "provided_fields": list(data.keys()),
+                "required_fields": []
+            }
+
+        assignments = template.field_assignments
+
         if field_type == "student":
-            target_fields = set(template.field_assignments.get("student_fields", []))
+            target_fields = set(assignments.get("student_fields", []))
         elif field_type == "admin":
-            target_fields = set(template.field_assignments.get("admin_fields", []))
+            target_fields = set(assignments.get("admin_fields", []))
         else:
             target_fields = set(template.placeholders or [])
-        
-        # Find required fields from schema
+
+        def get_field_value(field_name: str):
+            # Support literal dotted keys:
+            # {"row.nim": [...]}
+            if field_name in data:
+                return data[field_name]
+
+            # Support nested structures:
+            # {"row": {"nim": [...]}}
+            value = data
+
+            for part in field_name.split("."):
+                if not isinstance(value, dict) or part not in value:
+                    return None
+                value = value[part]
+
+            return value
+
+        def has_value(value):
+            if value is None:
+                return False
+
+            if isinstance(value, str):
+                return bool(value.strip())
+
+            if isinstance(value, list):
+                return any(has_value(item) for item in value)
+
+            if isinstance(value, dict):
+                if "value" in value:
+                    return has_value(value["value"])
+                return any(has_value(item) for item in value.values())
+
+            return True
+
         required_fields = set()
+
         for section in template.schema.get("sections", []):
             for field in section.get("fields", []):
                 if isinstance(field, str):
                     field_name = field
                     required = True
-                else:
+                elif isinstance(field, dict):
                     field_name = field.get("name")
                     required = field.get("required", True)
+                else:
+                    continue
 
                 if (
                     field_name
@@ -387,13 +435,16 @@ class FieldAssignmentService:
                 ):
                     required_fields.add(field_name)
 
-        # Check missing fields
-        provided_fields = set(data.keys())
-        missing_fields = required_fields - provided_fields
-        
+        missing_fields = sorted(
+            field_name
+            for field_name in required_fields
+            if not has_value(get_field_value(field_name))
+        )
+
         return {
             "valid": len(missing_fields) == 0,
-            "missing_fields": list(missing_fields),
-            "provided_fields": list(provided_fields),
-            "required_fields": list(required_fields)
+            "missing_fields": missing_fields,
+            "provided_fields": list(data.keys()),
+            "required_fields": sorted(required_fields)
         }
+
