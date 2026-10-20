@@ -1,0 +1,36 @@
+# Python environments and cache
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frontend dependencies and builds
+node_modules/
+dist/
+
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+*credentials*.json
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated files and uploads
+backend/temp/
+backend/generated_docs/
+backend/exports/
+backend/templates/
+
+# Operating system and IDE
+.DS_Store
+__MACOSX/
+.vscode/
+.idea/
+
+# Logs
+*.log
